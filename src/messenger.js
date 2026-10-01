@@ -168,11 +168,85 @@ async function processPendingCarts() {
   }
 }
 
+/**
+ * Build payment confirmed message
+ */
+function buildPaidMessage(cart) {
+  const template = getSetting('paid_message') || process.env.PAID_MESSAGE || '';
+  let items = [];
+  try {
+    items = JSON.parse(cart.items_json);
+  } catch (e) {
+    items = [];
+  }
+
+  const productList = items
+    .map((item) => {
+      const title = item.title || item.name || item.productName || 'Produto';
+      const qty = item.quantity || item.productQuantity || 1;
+      const priceCents = item.priceInCents || item.productPriceInCents || item.unitPrice || 0;
+      const price = (priceCents / 100).toFixed(2).replace('.', ',');
+      return `  • ${title} (${qty}x) - R$ ${price}`;
+    })
+    .join('\n');
+
+  const totalAmount = (cart.amount / 100).toFixed(2).replace('.', ',');
+  const firstName = cart.customer_name ? cart.customer_name.split(' ')[0] : 'cliente';
+
+  return template
+    .replace(/\{nome\}/g, firstName)
+    .replace(/\{produtos\}/g, productList)
+    .replace(/\{valor\}/g, totalAmount)
+    .replace(/\{link\}/g, cart.secure_url || '');
+}
+
+/**
+ * Send WhatsApp payment confirmation message
+ */
+async function sendPaymentConfirmation(cart) {
+  const isEnabled = getSetting('paid_message_active');
+  if (isEnabled === 'false') {
+    console.log('[Confirmação] Envio de pagamento desativado nas configurações.');
+    return { skipped: true, reason: 'Disabled in settings' };
+  }
+
+  if (!cart.customer_phone) {
+    console.log('[Confirmação] Sem telefone do cliente para enviar confirmação.');
+    return { skipped: true, reason: 'No phone' };
+  }
+
+  console.log(`[Confirmação de Pagamento] Enviando para #${cart.id} - ${cart.customer_name} (${cart.customer_phone})`);
+
+  const message = buildPaidMessage(cart);
+  const result = await sendWhatsAppMessage(cart.customer_phone, message);
+
+  // Log in message_log
+  try {
+    db.prepare(`
+      INSERT INTO message_log (cart_id, phone, message, status, error_message, waha_response)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      cart.id,
+      cart.customer_phone,
+      message,
+      result.success ? 'sent' : 'failed',
+      result.success ? null : result.error,
+      result.success ? JSON.stringify(result.data) : null
+    );
+  } catch (e) {
+    console.error('[Confirmação] Erro ao gravar log de confirmação:', e.message);
+  }
+
+  return result;
+}
+
 module.exports = {
   sendWhatsAppMessage,
   processCart,
   processPendingCarts,
   buildMessage,
+  buildPaidMessage,
+  sendPaymentConfirmation,
   formatPhone,
   getSetting,
 };

@@ -156,6 +156,28 @@ router.post('/carts/:id/resend', async (req, res) => {
 });
 
 /**
+ * POST /api/carts/:id/send-paid
+ * Send payment confirmation message for a specific cart
+ */
+router.post('/carts/:id/send-paid', async (req, res) => {
+  try {
+    const cart = db.prepare('SELECT * FROM abandoned_carts WHERE id = ?').get(req.params.id);
+    if (!cart) return res.status(404).json({ error: 'Carrinho não encontrado' });
+
+    const { sendPaymentConfirmation } = require('./messenger');
+    const result = await sendPaymentConfirmation(cart);
+
+    res.json({
+      success: result.success,
+      message: result.success ? 'Confirmação de pagamento enviada com sucesso!' : (result.error || 'Falha ao enviar confirmação')
+    });
+  } catch (error) {
+    console.error('[API] Erro ao enviar confirmação de pagamento:', error.message);
+    res.status(500).json({ error: 'Erro interno' });
+  }
+});
+
+/**
  * DELETE /api/carts/:id
  * Delete a cart record
  */

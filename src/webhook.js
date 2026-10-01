@@ -94,11 +94,11 @@ function handleTransactionPostback(payload) {
   if (!tx) return;
 
   const status = (tx.status || '').toLowerCase();
-  const txId = String(tx.id || tx.transactionId || tx.orderId || Date.now());
+  const txId = String(tx.id || tx.transactionId || tx.financialTransactionId || tx.orderId || Date.now());
 
   // If the transaction was paid, mark it as recovered
   if (status === 'paid' || status === 'approved' || status === 'completed' || status === 'success') {
-    markAsRecovered(txId);
+    markAsRecovered(txId, tx);
     return;
   }
 
@@ -121,14 +121,29 @@ function handleCheckoutPostback(payload) {
 
   const tx = checkout.transaction;
 
-  // If there's a transaction associated with the checkout
-  if (tx) {
-    const txStatus = (tx.status || '').toLowerCase();
-    if (txStatus === 'paid' || txStatus === 'approved') {
-      markAsRecovered(String(tx.id || tx.transactionId));
-      return;
-    }
+  // Check if checkout or transaction is paid / completed
+  const step = String(checkout.step || '').toUpperCase();
+  const status = String(checkout.status || (tx && tx.status) || '').toLowerCase();
+  const isPaid = status === 'paid' || status === 'approved' || status === 'completed' || status === 'success' ||
+                 step.includes('PAID') || step.includes('COMPLET') || step.includes('APPROVED') ||
+                 Boolean(checkout.recoveredAt);
 
+  if (isPaid) {
+    const cartId = String(
+      checkout.abandonedCartId ||
+      checkout.checkoutSessionId ||
+      checkout.financialTransactionId ||
+      (tx && (tx.id || tx.transactionId)) ||
+      checkout.id ||
+      checkout.cartToken ||
+      `cart_${Date.now()}`
+    );
+    markAsRecovered(cartId, checkout);
+    return;
+  }
+
+  // If there's an unpaid transaction associated with the checkout
+  if (tx) {
     scheduleRecovery(tx, 'checkout', checkout);
     return;
   }
@@ -241,85 +256,105 @@ function scheduleRecovery(tx, type, checkout = null) {
 }
 
 /**
- * Schedule a recovery message for an abandoned cart
+ * Mark a transaction as recovered (paid) and trigger WhatsApp payment confirmation
  */
-function scheduleRecovery(tx, type, checkout = null) {
-  const customer = tx.customer;
-  if (!customer || !customer.phone) {
-    console.log(`[Webhook] Transação ${tx.id} sem telefone do cliente, ignorando.`);
-    return;
-  }
-
-  const txId = String(tx.id);
-
-  // Check if we already have this cart
-  const existing = db.prepare('SELECT id, status FROM abandoned_carts WHERE transaction_id = ?').get(txId);
-  if (existing) {
-    // Update status if needed
-    if (existing.status === 'sent' || existing.status === 'recovered') {
-      console.log(`[Webhook] Transação ${txId} já processada (status: ${existing.status})`);
-      return;
-    }
-    // Update the payment status
-    db.prepare('UPDATE abandoned_carts SET payment_status = ?, updated_at = datetime(\'now\') WHERE id = ?')
-      .run(tx.status, existing.id);
-    console.log(`[Webhook] Transação ${txId} atualizada para status: ${tx.status}`);
-    return;
-  }
-
-  // Calculate scheduled time for recovery message
-  const delayMinutes = parseInt(getSetting('recovery_delay_minutes') || process.env.RECOVERY_DELAY_MINUTES || '30');
-  const scheduledAt = new Date(Date.now() + delayMinutes * 60 * 1000).toISOString();
-
-  // Get the best URL for the customer to complete payment
-  let secureUrl = tx.secureUrl || '';
-  if (checkout && checkout.secureUrl) {
-    secureUrl = checkout.secureUrl;
-  }
-
-  const items = tx.items || (checkout ? checkout.items : []) || [];
-
-  const stmt = db.prepare(`
-    INSERT INTO abandoned_carts (
-      transaction_id, checkout_id, customer_name, customer_email,
-      customer_phone, amount, items_json, secure_url,
-      status, payment_status, scheduled_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
-  `);
-
-  stmt.run(
+async function markAsRecovered(txId, tx = null) {
+  const candidates = [
     txId,
-    checkout ? String(checkout.id) : null,
-    customer.name || 'Cliente',
-    customer.email || '',
-    customer.phone,
-    tx.amount,
-    JSON.stringify(items),
-    secureUrl,
-    tx.status,
-    scheduledAt
-  );
+    tx && tx.abandonedCartId,
+    tx && tx.checkoutSessionId,
+    tx && tx.financialTransactionId,
+    tx && tx.cartToken,
+    tx && tx.id,
+    tx && tx.transactionId,
+    tx && tx.orderId,
+  ].filter(Boolean);
 
-  console.log(`[Webhook] ✓ Carrinho agendado para recuperação em ${delayMinutes}min - Cliente: ${customer.name} (${customer.phone})`);
-}
+  let cart = null;
+  for (const id of candidates) {
+    cart = db.prepare('SELECT * FROM abandoned_carts WHERE transaction_id = ? OR checkout_id = ?').get(String(id), String(id));
+    if (cart) break;
+  }
 
-/**
- * Mark a transaction as recovered (paid)
- */
-function markAsRecovered(txId) {
-  const cart = db.prepare('SELECT id, status FROM abandoned_carts WHERE transaction_id = ?').get(txId);
-  if (!cart) return;
+  // Fallback: match by customer phone if there is a pending cart
+  if (!cart && tx) {
+    const customer = extractCustomer(tx);
+    const phone = extractPhone(customer, tx);
+    if (phone) {
+      const cleanPhone = phone.replace(/\D/g, '');
+      if (cleanPhone.length >= 8) {
+        cart = db.prepare(`
+          SELECT * FROM abandoned_carts 
+          WHERE (customer_phone LIKE ? OR customer_phone LIKE ?)
+            AND status = 'pending'
+          ORDER BY created_at DESC LIMIT 1
+        `).get(`%${cleanPhone}%`, `%${cleanPhone.slice(-8)}%`);
+      }
+    }
+  }
 
-  db.prepare(`
-    UPDATE abandoned_carts
-    SET recovered = 1,
-        recovered_at = datetime('now'),
-        status = 'recovered',
-        updated_at = datetime('now')
-    WHERE id = ?
-  `).run(cart.id);
+  if (cart) {
+    db.prepare(`
+      UPDATE abandoned_carts
+      SET recovered = 1,
+          recovered_at = datetime('now'),
+          status = 'recovered',
+          payment_status = 'paid',
+          updated_at = datetime('now')
+      WHERE id = ?
+    `).run(cart.id);
 
-  console.log(`[Webhook] 🎉 Transação ${txId} RECUPERADA! Pagamento confirmado.`);
+    cart = db.prepare('SELECT * FROM abandoned_carts WHERE id = ?').get(cart.id);
+  } else if (tx) {
+    // Direct purchase without prior abandonment
+    const customer = extractCustomer(tx);
+    const phone = extractPhone(customer, tx);
+    const items = tx.items || tx.cartItems || tx.products || [];
+    const amount = tx.totalAmountInCents || tx.amount || tx.total || 0;
+
+    const stmt = db.prepare(`
+      INSERT INTO abandoned_carts (
+        transaction_id, checkout_id, customer_name, customer_email,
+        customer_phone, amount, items_json, secure_url,
+        status, payment_status, scheduled_at, recovered, recovered_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'recovered', 'paid', datetime('now'), 1, datetime('now'))
+    `);
+
+    const info = stmt.run(
+      txId,
+      tx.checkoutSessionId || tx.checkoutId || null,
+      customer.name || customer.fullName || 'Cliente',
+      customer.email || '',
+      phone || '',
+      amount,
+      JSON.stringify(items),
+      tx.recoveryUrl || tx.secureUrl || tx.url || ''
+    );
+
+    cart = db.prepare('SELECT * FROM abandoned_carts WHERE id = ?').get(info.lastInsertRowid);
+  }
+
+  console.log(`[Webhook] 🎉 Transação ${txId} PAGA / RECUPERADA!`);
+
+  // Send WhatsApp payment confirmation
+  if (cart && cart.customer_phone) {
+    try {
+      const alreadySent = db.prepare(`
+        SELECT id FROM message_log 
+        WHERE cart_id = ? AND (message LIKE '%confirmado%' OR message LIKE '%Muito obrigado%')
+      `).get(cart.id);
+
+      if (!alreadySent) {
+        const { sendPaymentConfirmation } = require('./messenger');
+        const sendResult = await sendPaymentConfirmation(cart);
+        console.log(`[Webhook] Confirmação de pagamento enviada para ${cart.customer_phone}:`, sendResult.success ? '✓ Sucesso' : '✗ Falhou');
+      } else {
+        console.log(`[Webhook] Confirmação de pagamento já enviada para o carrinho #${cart.id}.`);
+      }
+    } catch (err) {
+      console.error('[Webhook] Erro ao enviar mensagem de pagamento confirmado:', err.message);
+    }
+  }
 }
 
 module.exports = router;

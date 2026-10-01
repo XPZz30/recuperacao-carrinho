@@ -319,6 +319,37 @@
             </div>
           </div>
 
+          <div class="settings-section">
+            <h2 class="settings-title">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+              Mensagem de Pagamento Confirmado
+            </h2>
+            <div class="form-group">
+              <label for="settingPaidActive">Status do Disparo ao Confirmar Pagamento</label>
+              <div class="toggle-container">
+                <label class="toggle">
+                  <input type="checkbox" id="settingPaidActive" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+                <span class="toggle-label" id="paidActiveLabel">Ativo</span>
+              </div>
+              <small class="form-help">Envia mensagem automática no WhatsApp do cliente assim que o pagamento for aprovado (Pix ou Cartão)</small>
+            </div>
+            <div class="form-group">
+              <label for="settingPaidMessage">Modelo da mensagem de confirmação</label>
+              <textarea id="settingPaidMessage" rows="10" class="form-input form-textarea" placeholder="Sua mensagem de pagamento confirmado aqui..."></textarea>
+              <small class="form-help">
+                Variáveis disponíveis: <code>{nome}</code> <code>{produtos}</code> <code>{valor}</code> <code>{link}</code>
+              </small>
+            </div>
+            <div class="message-preview">
+              <h4>Pré-visualização:</h4>
+              <div class="whatsapp-bubble" id="paidMessagePreview">
+                <p>Carregando...</p>
+              </div>
+            </div>
+          </div>
+
           <div class="settings-actions">
             <button type="submit" class="btn btn-primary" id="saveSettings">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>

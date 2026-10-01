@@ -285,7 +285,12 @@
       $('#settingWahaKey').value = settings.waha_api_key || '';
       $('#settingMessage').value = settings.recovery_message || '';
 
+      $('#settingPaidActive').checked = settings.paid_message_active !== 'false';
+      $('#paidActiveLabel').textContent = settings.paid_message_active !== 'false' ? 'Ativo' : 'Inativo';
+      $('#settingPaidMessage').value = settings.paid_message || '';
+
       updateMessagePreview();
+      updatePaidMessagePreview();
     } catch (err) {
       console.error('Failed to load settings:', err);
     }
@@ -302,6 +307,8 @@
         waha_session: $('#settingWahaSession').value,
         waha_api_key: $('#settingWahaKey').value,
         recovery_message: $('#settingMessage').value,
+        paid_message_active: $('#settingPaidActive').checked ? 'true' : 'false',
+        paid_message: $('#settingPaidMessage').value,
       };
 
       await api('/api/settings', {
@@ -326,6 +333,17 @@
     $('#messagePreview').textContent = preview;
   }
 
+  function updatePaidMessagePreview() {
+    const template = $('#settingPaidMessage').value || '';
+    const preview = template
+      .replace(/\{nome\}/g, 'Samuel')
+      .replace(/\{produtos\}/g, '  • Overcooked (Mídia Digital) - PS4 (1x) - R$ 9,43')
+      .replace(/\{valor\}/g, '9,43')
+      .replace(/\{link\}/g, 'https://pagamento.sagamespro.com.br');
+
+    $('#paidMessagePreview').textContent = preview;
+  }
+
   // ==========================================
   // Cart Actions
   // ==========================================
@@ -337,6 +355,18 @@
       if (currentPage === 'carts') loadCarts();
     } catch (err) {
       showToast('Erro ao reenviar mensagem', 'error');
+    }
+  };
+
+  window.sendPaidConfirmation = async function (id) {
+    try {
+      const result = await api(`/api/carts/${id}/send-paid`, { method: 'POST' });
+      showToast(result.message || 'Confirmação enviada!', result.success ? 'success' : 'error');
+      if (currentPage === 'dashboard') loadDashboard();
+      if (currentPage === 'carts') loadCarts();
+      if (currentPage === 'logs') loadLogs();
+    } catch (err) {
+      showToast('Erro ao enviar confirmação', 'error');
     }
   };
 
@@ -388,6 +418,14 @@
           <ul style="padding-left: 20px; margin-top: 8px; color: var(--text-secondary); font-size: 13px;">${itemsHtml}</ul>
         </div>
         ${logsHtml ? `<div style="margin-top: 16px;"><strong style="font-size: 13px;">Histórico de Mensagens:</strong>${logsHtml}</div>` : ''}
+        <div style="margin-top: 20px; display: flex; gap: 10px; flex-wrap: wrap;">
+          <button class="btn btn-secondary" onclick="resendCart(${cart.id})" style="font-size: 12px; padding: 8px 14px;">
+            📨 Reenviar Recuperação
+          </button>
+          <button class="btn btn-primary" onclick="sendPaidConfirmation(${cart.id})" style="font-size: 12px; padding: 8px 14px; background: var(--success); border-color: var(--success);">
+            🎉 Disparar Pagamento Confirmado
+          </button>
+        </div>
       `;
 
       $('#modalOverlay').classList.add('active');
@@ -522,6 +560,12 @@
 
     // Message preview
     $('#settingMessage').addEventListener('input', updateMessagePreview);
+
+    // Paid message toggle & preview
+    $('#settingPaidActive').addEventListener('change', (e) => {
+      $('#paidActiveLabel').textContent = e.target.checked ? 'Ativo' : 'Inativo';
+    });
+    $('#settingPaidMessage').addEventListener('input', updatePaidMessagePreview);
 
     // Modal close
     $('#modalClose').addEventListener('click', () => {
