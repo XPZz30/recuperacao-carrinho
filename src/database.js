@@ -80,7 +80,7 @@ const defaultSettings = {
   recovery_delay_minutes: '25',
   recovery_message: 'Olá {nome}! 👋\n\nNotamos que você não finalizou sua compra.\n\n🛒 *Itens no carrinho:*\n{produtos}\n\n💰 *Valor total:* R$ {valor}\n\nFinalize agora mesmo clicando no link abaixo:\n👉 {link}\n\nSe precisar de ajuda, é só responder esta mensagem! 😊',
   paid_message_active: 'true',
-  paid_message: 'Olá {nome}! 🎉\n\nSeu pagamento foi confirmado com sucesso! ✅\n\n🛒 *Itens do seu pedido:*\n{produtos}\n\n💰 *Valor total:* R$ {valor}\n\nEstamos preparando tudo com muito carinho. Muito obrigado pela sua compra!\n\nSe precisar de qualquer informação ou ajuda, é só responder esta mensagem! 😊',
+  paid_message: 'Olá {nome}! 🎉\n\nSeu pagamento foi confirmado com sucesso! ✅\n\n🛒 *Itens do seu pedido:*\n{produtos}\n\n💰 *Valor total:* R$ {valor}\n\nMuito obrigado pela preferencia! Aguarda a nossa equipe enviar o seu acesso pelo whatsapp.',
   active: 'true',
   waha_api_url: process.env.WAHA_API_URL || 'https://waha-production-e923.up.railway.app',
   waha_session: process.env.WAHA_SESSION || 'default',
