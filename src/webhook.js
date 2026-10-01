@@ -20,13 +20,26 @@ const router = express.Router();
  */
 router.post('/bestfy', (req, res) => {
   try {
-    const payload = req.body;
-    console.log(`[Webhook] Postback recebido - Tipo: ${payload.type}, ID: ${payload.objectId}`);
+    const payload = req.body || {};
+    const type = (payload.type || payload.event || '').toLowerCase();
+    const objectId = payload.objectId || (payload.data && payload.data.id) || payload.id || 'N/A';
+    console.log(`[Webhook] Postback recebido - Tipo/Evento: "${type}", ID: ${objectId}`);
 
-    if (payload.type === 'transaction') {
+    if (type.includes('transaction') || type.includes('transacao') || type.includes('transação')) {
       handleTransactionPostback(payload);
-    } else if (payload.type === 'checkout') {
+    } else if (type.includes('checkout') || type.includes('cart') || type.includes('carrinho') || type.includes('abandoned')) {
       handleCheckoutPostback(payload);
+    } else {
+      // Fallback heuristic based on data structure
+      if (payload.data && payload.data.status && !payload.data.items) {
+        handleTransactionPostback(payload);
+      } else if (payload.data && (payload.data.customer || payload.data.items)) {
+        handleCheckoutPostback(payload);
+      } else if (payload.status) {
+        handleTransactionPostback({ data: payload });
+      } else {
+        console.log('[Webhook] Estrutura genérica recebida:', JSON.stringify(payload).slice(0, 200));
+      }
     }
 
     res.status(200).json({ received: true });
@@ -40,46 +53,89 @@ router.post('/bestfy', (req, res) => {
  * Handle a transaction postback from Bestfy
  */
 function handleTransactionPostback(payload) {
-  const tx = payload.data;
+  const tx = payload.data || payload;
   if (!tx) return;
 
   const status = tx.status;
   const txId = String(tx.id);
 
   // If the transaction was paid, mark it as recovered
-  if (status === 'paid') {
+  if (status === 'paid' || status === 'approved') {
     markAsRecovered(txId);
     return;
   }
 
   // If the transaction is in a "pending" state, schedule recovery
-  const pendingStatuses = ['waiting_payment', 'processing', 'refused'];
+  const pendingStatuses = ['waiting_payment', 'processing', 'refused', 'failed', 'pending'];
   if (pendingStatuses.includes(status)) {
     scheduleRecovery(tx, 'transaction');
   }
 }
 
 /**
- * Handle a checkout postback from Bestfy
+ * Handle a checkout or abandoned cart postback from Bestfy
  */
 function handleCheckoutPostback(payload) {
-  const checkout = payload.data;
+  const checkout = payload.data || payload;
   if (!checkout) return;
 
   const tx = checkout.transaction;
 
-  // If there's a transaction with the checkout
+  // If there's a transaction associated with the checkout
   if (tx) {
-    if (tx.status === 'paid') {
+    if (tx.status === 'paid' || tx.status === 'approved') {
       markAsRecovered(String(tx.id));
       return;
     }
 
-    const pendingStatuses = ['waiting_payment', 'processing', 'refused'];
+    const pendingStatuses = ['waiting_payment', 'processing', 'refused', 'failed', 'pending'];
     if (pendingStatuses.includes(tx.status)) {
       scheduleRecovery(tx, 'checkout', checkout);
     }
+    return;
   }
+
+  // Pure abandoned cart (customer left before creating transaction)
+  const customer = checkout.customer || checkout.buyer;
+  if (!customer || !customer.phone) {
+    console.log(`[Webhook] Carrinho ${checkout.id || ''} sem telefone do cliente, ignorando.`);
+    return;
+  }
+
+  const cartId = String(checkout.id || checkout.checkoutId || `cart_${Date.now()}`);
+  const existing = db.prepare('SELECT id, status FROM abandoned_carts WHERE checkout_id = ? OR transaction_id = ?').get(cartId, cartId);
+  if (existing) {
+    console.log(`[Webhook] Carrinho ${cartId} já cadastrado (status: ${existing.status})`);
+    return;
+  }
+
+  const delayMinutes = parseInt(getSetting('recovery_delay_minutes') || process.env.RECOVERY_DELAY_MINUTES || '30');
+  const scheduledAt = new Date(Date.now() + delayMinutes * 60 * 1000).toISOString();
+  const secureUrl = checkout.secureUrl || checkout.recoveryUrl || checkout.url || '';
+  const items = checkout.items || [];
+  const amount = checkout.amount || checkout.total || 0;
+
+  const stmt = db.prepare(`
+    INSERT INTO abandoned_carts (
+      transaction_id, checkout_id, customer_name, customer_email,
+      customer_phone, amount, items_json, secure_url,
+      status, payment_status, scheduled_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'abandoned', ?)
+  `);
+
+  stmt.run(
+    cartId,
+    cartId,
+    customer.name || 'Cliente',
+    customer.email || '',
+    customer.phone,
+    amount,
+    JSON.stringify(items),
+    secureUrl,
+    scheduledAt
+  );
+
+  console.log(`[Webhook] ✓ Carrinho abandonado agendado para recuperação em ${delayMinutes}min - Cliente: ${customer.name} (${customer.phone})`);
 }
 
 /**
