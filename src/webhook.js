@@ -142,7 +142,7 @@ function handleCheckoutPostback(payload) {
     return;
   }
 
-  const cartId = String(checkout.id || checkout.checkoutId || `cart_${Date.now()}`);
+  const cartId = String(checkout.abandonedCartId || checkout.id || checkout.checkoutId || `cart_${Date.now()}`);
   const existing = db.prepare('SELECT id, status FROM abandoned_carts WHERE checkout_id = ? OR transaction_id = ?').get(cartId, cartId);
   if (existing) {
     console.log(`[Webhook] Carrinho ${cartId} já cadastrado (status: ${existing.status})`);
@@ -151,9 +151,9 @@ function handleCheckoutPostback(payload) {
 
   const delayMinutes = parseInt(getSetting('recovery_delay_minutes') || process.env.RECOVERY_DELAY_MINUTES || '30');
   const scheduledAt = new Date(Date.now() + delayMinutes * 60 * 1000).toISOString();
-  const secureUrl = checkout.secureUrl || checkout.recoveryUrl || checkout.url || checkout.checkoutUrl || '';
-  const items = checkout.items || checkout.products || [];
-  const amount = checkout.amount || checkout.total || checkout.value || 0;
+  const secureUrl = checkout.recoveryUrl || checkout.secureUrl || checkout.url || checkout.checkoutUrl || '';
+  const items = checkout.items || checkout.cartItems || checkout.products || [];
+  const amount = checkout.totalAmountInCents || checkout.amount || checkout.total || checkout.value || 0;
 
   const stmt = db.prepare(`
     INSERT INTO abandoned_carts (

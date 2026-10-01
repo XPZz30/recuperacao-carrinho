@@ -30,10 +30,21 @@ function formatPhone(phone) {
  */
 function buildMessage(cart) {
   const template = getSetting('recovery_message') || process.env.RECOVERY_MESSAGE || '';
-  const items = JSON.parse(cart.items_json);
+  let items = [];
+  try {
+    items = JSON.parse(cart.items_json);
+  } catch (e) {
+    items = [];
+  }
 
   const productList = items
-    .map((item) => `  • ${item.title} (${item.quantity}x) - R$ ${(item.unitPrice / 100).toFixed(2)}`)
+    .map((item) => {
+      const title = item.title || item.name || item.productName || 'Produto';
+      const qty = item.quantity || item.productQuantity || 1;
+      const priceCents = item.priceInCents || item.productPriceInCents || item.unitPrice || 0;
+      const price = (priceCents / 100).toFixed(2).replace('.', ',');
+      return `  • ${title} (${qty}x) - R$ ${price}`;
+    })
     .join('\n');
 
   const totalAmount = (cart.amount / 100).toFixed(2).replace('.', ',');
