@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CartRecover — Recuperação de Carrinho Abandonado</title>
+  <meta name="description" content="Painel de controle para recuperação de carrinhos abandonados via WhatsApp">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛒</text></svg>">
+</head>
+<body>
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">
+        <span class="logo-icon">🛒</span>
+        <span class="logo-text">CartRecover</span>
+      </div>
+      <button class="sidebar-toggle" id="sidebarToggle" aria-label="Toggle sidebar">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+      </button>
+    </div>
+
+    <nav class="sidebar-nav">
+      <a href="#" class="nav-item active" data-page="dashboard" id="nav-dashboard">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        <span>Dashboard</span>
+      </a>
+      <a href="#" class="nav-item" data-page="carts" id="nav-carts">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/></svg>
+        <span>Carrinhos</span>
+      </a>
+      <a href="#" class="nav-item" data-page="logs" id="nav-logs">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        <span>Logs</span>
+      </a>
+      <a href="#" class="nav-item" data-page="settings" id="nav-settings">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+        <span>Configurações</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="connection-status" id="connectionStatus">
+        <span class="status-dot"></span>
+        <span class="status-text">Conectado</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="main-content" id="mainContent">
+    <!-- Header -->
+    <header class="content-header">
+      <div class="header-left">
+        <button class="mobile-menu" id="mobileMenu" aria-label="Menu">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+        <h1 class="page-title" id="pageTitle">Dashboard</h1>
+      </div>
+      <div class="header-right">
+        <div class="webhook-url" id="webhookInfo">
+          <span class="webhook-label">Webhook URL:</span>
+          <code class="webhook-code" id="webhookUrl"></code>
+          <button class="btn-copy" id="copyWebhook" title="Copiar">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Pages -->
+    <div class="page-content">
+      <!-- Dashboard Page -->
+      <section class="page active" id="page-dashboard">
+        <div class="stats-grid" id="statsGrid">
+          <div class="stat-card stat-total">
+            <div class="stat-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 002 1.61h9.72a2 2 0 002-1.61L23 6H6"/></svg>
+            </div>
+            <div class="stat-info">
+              <span class="stat-value" id="statTotalCarts">0</span>
+              <span class="stat-label">Total Carrinhos</span>
+            </div>
+          </div>
+          <div class="stat-card stat-pending">
+            <div class="stat-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            </div>
+            <div class="stat-info">
+              <span class="stat-value" id="statPendingCarts">0</span>
+              <span class="stat-label">Aguardando Envio</span>
+            </div>
+          </div>
+          <div class="stat-card stat-sent">
+            <div class="stat-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></svg>
+            </div>
+            <div class="stat-info">
+              <span class="stat-value" id="statSentCarts">0</span>
+              <span class="stat-label">Mensagens Enviadas</span>
+            </div>
+          </div>
+          <div class="stat-card stat-recovered">
+            <div class="stat-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+            </div>
+            <div class="stat-info">
+              <span class="stat-value" id="statRecoveredCarts">0</span>
+              <span class="stat-label">Recuperados</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="metrics-row">
+          <div class="metric-card">
+            <div class="metric-header">
+              <h3>Taxa de Recuperação</h3>
+            </div>
+            <div class="metric-body">
+              <div class="metric-circle" id="recoveryRateCircle">
+                <svg viewBox="0 0 120 120">
+                  <circle cx="60" cy="60" r="52" fill="none" stroke="var(--surface-3)" stroke-width="8"/>
+                  <circle cx="60" cy="60" r="52" fill="none" stroke="url(#gradient)" stroke-width="8" stroke-dasharray="327" stroke-dashoffset="327" stroke-linecap="round" transform="rotate(-90 60 60)" id="rateCircle"/>
+                  <defs>
+                    <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                      <stop offset="0%" stop-color="var(--accent)"/>
+                      <stop offset="100%" stop-color="var(--success)"/>
+                    </linearGradient>
+                  </defs>
+                </svg>
+                <span class="metric-percentage" id="recoveryRate">0%</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="metric-card">
+            <div class="metric-header">
+              <h3>Valor Recuperado</h3>
+            </div>
+            <div class="metric-body metric-money">
+              <div class="money-recovered">
+                <span class="money-currency">R$</span>
+                <span class="money-value" id="recoveredAmount">0,00</span>
+              </div>
+              <div class="money-total">
+                de R$ <span id="totalAmount">0,00</span> em carrinhos abandonados
+              </div>
+            </div>
+          </div>
+
+          <div class="metric-card">
+            <div class="metric-header">
+              <h3>Últimos 7 Dias</h3>
+            </div>
+            <div class="metric-body metric-recent">
+              <div class="recent-stat">
+                <span class="recent-value" id="recentCarts">0</span>
+                <span class="recent-label">Novos carrinhos</span>
+              </div>
+              <div class="recent-divider"></div>
+              <div class="recent-stat">
+                <span class="recent-value success" id="recentRecovered">0</span>
+                <span class="recent-label">Recuperados</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="recent-section">
+          <div class="section-header">
+            <h2>Carrinhos Recentes</h2>
+            <a href="#" class="btn-link" data-page="carts">Ver todos →</a>
+          </div>
+          <div class="table-container">
+            <table class="data-table" id="recentCartsTable">
+              <thead>
+                <tr>
+                  <th>Cliente</th>
+                  <th>Telefone</th>
+                  <th>Valor</th>
+                  <th>Status</th>
+                  <th>Data</th>
+                  <th>Ações</th>
+                </tr>
+              </thead>
+              <tbody id="recentCartsBody">
+                <tr class="empty-row"><td colspan="6">Nenhum carrinho registrado ainda</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- Carts Page -->
+      <section class="page" id="page-carts">
+        <div class="page-actions">
+          <div class="filters">
+            <select class="filter-select" id="cartFilter">
+              <option value="all">Todos</option>
+              <option value="pending">Pendentes</option>
+              <option value="sent">Enviados</option>
+              <option value="recovered">Recuperados</option>
+              <option value="failed">Falharam</option>
+            </select>
+            <div class="search-box">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+              <input type="text" placeholder="Buscar por nome, telefone..." id="cartSearch">
+            </div>
+          </div>
+        </div>
+        <div class="table-container">
+          <table class="data-table" id="cartsTable">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Cliente</th>
+                <th>Telefone</th>
+                <th>Valor</th>
+                <th>Produtos</th>
+                <th>Status</th>
+                <th>Agendado</th>
+                <th>Ações</th>
+              </tr>
+            </thead>
+            <tbody id="cartsBody">
+              <tr class="empty-row"><td colspan="8">Carregando...</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="pagination" id="cartsPagination"></div>
+      </section>
+
+      <!-- Logs Page -->
+      <section class="page" id="page-logs">
+        <div class="table-container">
+          <table class="data-table" id="logsTable">
+            <thead>
+              <tr>
+                <th>Data/Hora</th>
+                <th>Cliente</th>
+                <th>Telefone</th>
+                <th>Status</th>
+                <th>Erro</th>
+              </tr>
+            </thead>
+            <tbody id="logsBody">
+              <tr class="empty-row"><td colspan="5">Carregando...</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="pagination" id="logsPagination"></div>
+      </section>
+
+      <!-- Settings Page -->
+      <section class="page" id="page-settings">
+        <form class="settings-form" id="settingsForm">
+          <div class="settings-section">
+            <h2 class="settings-title">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              Sistema
+            </h2>
+            <div class="form-group">
+              <label for="settingActive">Status do Sistema</label>
+              <div class="toggle-container">
+                <label class="toggle">
+                  <input type="checkbox" id="settingActive" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+                <span class="toggle-label" id="activeLabel">Ativo</span>
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="settingDelay">Tempo de espera antes do envio (minutos)</label>
+              <input type="number" id="settingDelay" min="1" max="1440" value="30" class="form-input">
+              <small class="form-help">Quanto tempo esperar após o abandono para enviar a mensagem</small>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h2 class="settings-title">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg>
+              WAHA (WhatsApp)
+            </h2>
+            <div class="form-group">
+              <label for="settingWahaUrl">URL da API WAHA</label>
+              <input type="url" id="settingWahaUrl" placeholder="http://localhost:3001" class="form-input">
+            </div>
+            <div class="form-group">
+              <label for="settingWahaSession">Nome da Sessão</label>
+              <input type="text" id="settingWahaSession" placeholder="default" class="form-input">
+            </div>
+            <div class="form-group">
+              <label for="settingWahaKey">API Key (opcional)</label>
+              <input type="password" id="settingWahaKey" placeholder="Deixe vazio se não usar" class="form-input">
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h2 class="settings-title">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+              Mensagem de Recuperação
+            </h2>
+            <div class="form-group">
+              <label for="settingMessage">Modelo da mensagem</label>
+              <textarea id="settingMessage" rows="10" class="form-input form-textarea" placeholder="Sua mensagem aqui..."></textarea>
+              <small class="form-help">
+                Variáveis disponíveis: <code>{nome}</code> <code>{produtos}</code> <code>{valor}</code> <code>{link}</code>
+              </small>
+            </div>
+            <div class="message-preview">
+              <h4>Pré-visualização:</h4>
+              <div class="whatsapp-bubble" id="messagePreview">
+                <p>Carregando...</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-actions">
+            <button type="submit" class="btn btn-primary" id="saveSettings">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+              Salvar Configurações
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
+  </main>
+
+  <!-- Toast notifications -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- Modal -->
+  <div class="modal-overlay" id="modalOverlay">
+    <div class="modal" id="modal">
+      <div class="modal-header">
+        <h3 id="modalTitle">Detalhes</h3>
+        <button class="modal-close" id="modalClose">&times;</button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
