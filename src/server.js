@@ -33,9 +33,23 @@ cron.schedule('* * * * *', async () => {
   }
 });
 
+// Health check for Railway
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok', uptime: process.uptime() });
+});
+
 // SPA fallback - serve index.html for all unmatched routes
 app.get('/{*path}', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
+});
+
+// Prevent crashes on unexpected errors
+process.on('unhandledRejection', (reason) => {
+  console.error('[Unhandled Rejection]', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[Uncaught Exception]', err);
 });
 
 // Start server

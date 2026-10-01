@@ -2,10 +2,10 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 
-// Use Railway volume if available, otherwise local data dir
-const dataDir = process.env.RAILWAY_VOLUME_MOUNT_PATH
-  ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'db')
-  : path.join(__dirname, '..', 'data');
+// Use custom data dir, Railway volume, or local data dir
+const dataDir = process.env.DATA_DIR 
+  || process.env.RAILWAY_VOLUME_MOUNT_PATH 
+  || path.join(__dirname, '..', 'data');
 
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
