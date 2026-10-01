@@ -78,9 +78,15 @@ const insertSetting = db.prepare(`
 
 const defaultSettings = {
   recovery_delay_minutes: '25',
-  recovery_message: 'Olá {nome}! 👋\n\nNotamos que você não finalizou sua compra.\n\n🛒 *Itens no carrinho:*\n{produtos}\n\n💰 *Valor total:* R$ {valor}\n\nFinalize agora mesmo clicando no link abaixo:\n👉 {link}\n\nSe precisar de ajuda, é só responder esta mensagem! 😊',
+  recovery_message: '{Olá|Oi|Opa} {nome}! 👋\n\n{Notamos|Vimos|Percebemos} que você não finalizou sua compra.\n\n🛒 *Itens no carrinho:*\n{produtos}\n\n💰 *Valor total:* R$ {valor}\n\n{Finalize agora mesmo clicando no link abaixo:|Conclua seu pedido pelo link abaixo:|Acesse aqui para finalizar:}\n👉 {link}\n\n{Se precisar de ajuda, é só responder esta mensagem! 😊|Qualquer dúvida, estamos à disposição por aqui! 😊|Pode responder esta mensagem se precisar de suporte! 😊}',
   paid_message_active: 'true',
-  paid_message: 'Olá {nome}! 🎉\n\nSeu pagamento foi confirmado com sucesso! ✅\n\n🛒 *Itens do seu pedido:*\n{produtos}\n\n💰 *Valor total:* R$ {valor}\n\nMuito obrigado pela preferencia! Aguarda a nossa equipe enviar o seu acesso pelo whatsapp.',
+  paid_message: '{Olá|Oi|Opa} {nome}! 🎉\n\nSeu pagamento foi confirmado com sucesso! ✅\n\n🛒 *Itens do seu pedido:*\n{produtos}\n\n💰 *Valor total:* R$ {valor}\n\n{Muito obrigado pela preferencia!|Agradecemos pela sua compra!|Obrigado pela preferência!} Aguarda a nossa equipe enviar o seu acesso pelo whatsapp.',
+  anti_ban_typing: 'true',
+  anti_ban_delay_min: '8',
+  anti_ban_delay_max: '18',
+  quiet_hours_active: 'true',
+  quiet_hours_start: '23',
+  quiet_hours_end: '8',
   active: 'true',
   waha_api_url: process.env.WAHA_API_URL || 'https://waha-production-e923.up.railway.app',
   waha_session: process.env.WAHA_SESSION || 'default',

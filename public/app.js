@@ -289,6 +289,13 @@
       $('#paidActiveLabel').textContent = settings.paid_message_active !== 'false' ? 'Ativo' : 'Inativo';
       $('#settingPaidMessage').value = settings.paid_message || '';
 
+      $('#settingAntiBanTyping').checked = settings.anti_ban_typing !== 'false';
+      $('#antiBanTypingLabel').textContent = settings.anti_ban_typing !== 'false' ? 'Ativo (Simula "Digitando..." por 3-5s antes de enviar)' : 'Inativo';
+      $('#settingQuietHours').checked = settings.quiet_hours_active !== 'false';
+      $('#quietHoursLabel').textContent = settings.quiet_hours_active !== 'false' ? 'Ativo (Pausa carrinhos das 23h às 08h para evitar denúncias)' : 'Inativo';
+      $('#settingDelayMin').value = settings.anti_ban_delay_min || '8';
+      $('#settingDelayMax').value = settings.anti_ban_delay_max || '18';
+
       updateMessagePreview();
       updatePaidMessagePreview();
     } catch (err) {
@@ -309,6 +316,10 @@
         recovery_message: $('#settingMessage').value,
         paid_message_active: $('#settingPaidActive').checked ? 'true' : 'false',
         paid_message: $('#settingPaidMessage').value,
+        anti_ban_typing: $('#settingAntiBanTyping').checked ? 'true' : 'false',
+        quiet_hours_active: $('#settingQuietHours').checked ? 'true' : 'false',
+        anti_ban_delay_min: $('#settingDelayMin').value,
+        anti_ban_delay_max: $('#settingDelayMax').value,
       };
 
       await api('/api/settings', {
@@ -322,8 +333,18 @@
     }
   }
 
+  function parseSpintaxClient(text) {
+    if (!text) return '';
+    const spintaxRegex = /\{([^{}|]+(?:\|[^{}|]+)+)\}/g;
+    return text.replace(spintaxRegex, (match, options) => {
+      const choices = options.split('|');
+      return choices[0].trim();
+    });
+  }
+
   function updateMessagePreview() {
-    const template = $('#settingMessage').value || '';
+    const rawTemplate = $('#settingMessage').value || '';
+    const template = parseSpintaxClient(rawTemplate);
     const preview = template
       .replace(/\{nome\}/g, 'Maria')
       .replace(/\{produtos\}/g, '  • Camiseta Básica (2x) - R$ 49,90\n  • Calça Jeans (1x) - R$ 129,90')
@@ -334,7 +355,8 @@
   }
 
   function updatePaidMessagePreview() {
-    const template = $('#settingPaidMessage').value || '';
+    const rawTemplate = $('#settingPaidMessage').value || '';
+    const template = parseSpintaxClient(rawTemplate);
     const preview = template
       .replace(/\{nome\}/g, 'Samuel')
       .replace(/\{produtos\}/g, '  • Overcooked (Mídia Digital) - PS4 (1x) - R$ 9,43')
@@ -566,6 +588,14 @@
       $('#paidActiveLabel').textContent = e.target.checked ? 'Ativo' : 'Inativo';
     });
     $('#settingPaidMessage').addEventListener('input', updatePaidMessagePreview);
+
+    // Anti-Ban toggles
+    $('#settingAntiBanTyping').addEventListener('change', (e) => {
+      $('#antiBanTypingLabel').textContent = e.target.checked ? 'Ativo (Simula "Digitando..." por 3-5s antes de enviar)' : 'Inativo';
+    });
+    $('#settingQuietHours').addEventListener('change', (e) => {
+      $('#quietHoursLabel').textContent = e.target.checked ? 'Ativo (Pausa carrinhos das 23h às 08h para evitar denúncias)' : 'Inativo';
+    });
 
     // Modal close
     $('#modalClose').addEventListener('click', () => {
