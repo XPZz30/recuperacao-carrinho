@@ -57,6 +57,15 @@ db.exec(`
     updated_at TEXT DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS webhook_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    path TEXT,
+    method TEXT,
+    payload_json TEXT,
+    processed INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
   CREATE INDEX IF NOT EXISTS idx_carts_status ON abandoned_carts(status);
   CREATE INDEX IF NOT EXISTS idx_carts_scheduled ON abandoned_carts(scheduled_at);
   CREATE INDEX IF NOT EXISTS idx_carts_phone ON abandoned_carts(customer_phone);

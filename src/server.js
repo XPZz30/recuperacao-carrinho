@@ -19,7 +19,17 @@ app.use('/api', apiRoutes);
 
 // Webhook routes
 const webhookRoutes = require('./webhook');
+app.use('/webhook/bestfy', webhookRoutes);
 app.use('/webhook', webhookRoutes);
+app.use('/api/webhook', webhookRoutes);
+
+// Fallback: if webhook is posted to root URL
+app.post('/', (req, res, next) => {
+  if (req.body && (req.body.type || req.body.event || req.body.data || req.body.status || req.body.id)) {
+    return webhookRoutes(req, res, next);
+  }
+  next();
+});
 
 // Initialize the messenger scheduler
 const { processPendingCarts } = require('./messenger');

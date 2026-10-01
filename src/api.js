@@ -251,4 +251,18 @@ router.get('/logs', (req, res) => {
   }
 });
 
+/**
+ * GET /api/webhook-events
+ * Returns raw webhook events received
+ */
+router.get('/webhook-events', (req, res) => {
+  try {
+    const events = db.prepare('SELECT * FROM webhook_events ORDER BY created_at DESC LIMIT 50').all();
+    res.json(events);
+  } catch (error) {
+    console.error('[API] Erro ao buscar webhook events:', error.message);
+    res.status(500).json({ error: 'Erro interno' });
+  }
+});
+
 module.exports = router;
