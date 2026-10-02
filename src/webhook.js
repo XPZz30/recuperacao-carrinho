@@ -87,6 +87,32 @@ function extractCustomer(obj) {
 }
 
 /**
+ * Extract amount in cents from object or calculate by summing items
+ */
+function extractAmount(obj, items = []) {
+  if (!obj && (!items || items.length === 0)) return 0;
+
+  let raw = obj ? (obj.totalAmountInCents || obj.amountInCents || obj.amount || obj.total || obj.value || obj.totalAmount) : 0;
+
+  if (typeof raw === 'string') {
+    raw = parseFloat(raw.replace(/[^\d.,]/g, '').replace(',', '.'));
+  }
+
+  const effectiveItems = (items && items.length > 0) ? items : (obj && (obj.cartItems || obj.items || obj.products) || []);
+
+  if ((!raw || Number(raw) === 0) && Array.isArray(effectiveItems) && effectiveItems.length > 0) {
+    raw = effectiveItems.reduce((sum, item) => {
+      const price = item.productPriceInCents || item.priceInCents || item.unitPriceInCents || item.price || item.unitPrice || 0;
+      const qty = item.productQuantity || item.quantity || 1;
+      const priceCents = (Number(price) < 1000 && String(price).includes('.')) ? Math.round(Number(price) * 100) : Number(price);
+      return sum + (priceCents * Number(qty));
+    }, 0);
+  }
+
+  return Math.round(Number(raw) || 0);
+}
+
+/**
  * Handle a transaction postback from Bestfy
  */
 function handleTransactionPostback(payload) {
@@ -168,7 +194,7 @@ function handleCheckoutPostback(payload) {
   const scheduledAt = new Date(Date.now() + delayMinutes * 60 * 1000).toISOString();
   const secureUrl = checkout.recoveryUrl || checkout.secureUrl || checkout.url || checkout.checkoutUrl || '';
   const items = checkout.items || checkout.cartItems || checkout.products || [];
-  const amount = checkout.totalAmountInCents || checkout.amount || checkout.total || checkout.value || 0;
+  const amount = extractAmount(checkout, items);
 
   const stmt = db.prepare(`
     INSERT INTO abandoned_carts (
@@ -206,16 +232,32 @@ function scheduleRecovery(tx, type, checkout = null) {
   }
 
   const txId = String(tx.id || tx.transactionId || Date.now());
+  const items = tx.items || tx.cartItems || (checkout ? (checkout.items || checkout.cartItems || checkout.products) : []) || [];
+  const amount = extractAmount(tx, items) || (checkout ? extractAmount(checkout, items) : 0);
 
   // Check if we already have this cart
-  const existing = db.prepare('SELECT id, status FROM abandoned_carts WHERE transaction_id = ?').get(txId);
+  const existing = db.prepare('SELECT id, status, amount FROM abandoned_carts WHERE transaction_id = ?').get(txId);
   if (existing) {
     if (existing.status === 'sent' || existing.status === 'recovered') {
       console.log(`[Webhook] Transação ${txId} já processada (status: ${existing.status})`);
       return;
     }
-    db.prepare('UPDATE abandoned_carts SET payment_status = ?, updated_at = datetime(\'now\') WHERE id = ?')
-      .run(tx.status || 'pending', existing.id);
+    const updateAmount = (!existing.amount || existing.amount === 0) && amount > 0;
+    db.prepare(`
+      UPDATE abandoned_carts 
+      SET payment_status = ?, 
+          amount = CASE WHEN ? > 0 THEN ? ELSE amount END,
+          items_json = CASE WHEN ? = 1 THEN ? ELSE items_json END,
+          updated_at = datetime('now') 
+      WHERE id = ?
+    `).run(
+      tx.status || 'pending',
+      updateAmount ? amount : 0,
+      amount,
+      updateAmount ? 1 : 0,
+      JSON.stringify(items),
+      existing.id
+    );
     console.log(`[Webhook] Transação ${txId} atualizada para status: ${tx.status}`);
     return;
   }
@@ -227,9 +269,6 @@ function scheduleRecovery(tx, type, checkout = null) {
   if (checkout && (checkout.secureUrl || checkout.recoveryUrl || checkout.url)) {
     secureUrl = checkout.secureUrl || checkout.recoveryUrl || checkout.url;
   }
-
-  const items = tx.items || (checkout ? checkout.items : []) || [];
-  const amount = tx.amount || tx.total || 0;
 
   const stmt = db.prepare(`
     INSERT INTO abandoned_carts (
@@ -293,24 +332,37 @@ async function markAsRecovered(txId, tx = null) {
     }
   }
 
+  const items = (tx && (tx.items || tx.cartItems || tx.products)) || [];
+  const amount = extractAmount(tx, items);
+
   if (cart) {
+    const updateAmount = (!cart.amount || cart.amount === 0) && amount > 0;
+    const updateItems = (!cart.items_json || cart.items_json === '[]') && items.length > 0;
+
     db.prepare(`
       UPDATE abandoned_carts
       SET recovered = 1,
           recovered_at = datetime('now'),
           status = 'recovered',
           payment_status = 'paid',
+          amount = CASE WHEN ? > 0 THEN ? ELSE amount END,
+          items_json = CASE WHEN ? = 1 THEN ? ELSE items_json END,
           updated_at = datetime('now')
       WHERE id = ?
-    `).run(cart.id);
+    `).run(
+      updateAmount ? amount : 0,
+      amount,
+      updateItems ? 1 : 0,
+      JSON.stringify(items),
+      cart.id
+    );
 
     cart = db.prepare('SELECT * FROM abandoned_carts WHERE id = ?').get(cart.id);
   } else if (tx) {
     // Direct purchase without prior abandonment
     const customer = extractCustomer(tx);
     const phone = extractPhone(customer, tx);
-    const items = tx.items || tx.cartItems || tx.products || [];
-    const amount = tx.totalAmountInCents || tx.amount || tx.total || 0;
+    const secureUrl = tx.recoveryUrl || tx.secureUrl || tx.url || '';
 
     const stmt = db.prepare(`
       INSERT INTO abandoned_carts (
@@ -328,7 +380,7 @@ async function markAsRecovered(txId, tx = null) {
       phone || '',
       amount,
       JSON.stringify(items),
-      tx.recoveryUrl || tx.secureUrl || tx.url || ''
+      secureUrl
     );
 
     cart = db.prepare('SELECT * FROM abandoned_carts WHERE id = ?').get(info.lastInsertRowid);

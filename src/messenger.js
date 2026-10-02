@@ -24,11 +24,80 @@ function setSetting(key, value) {
  * Format a phone number to WhatsApp format (55XXXXXXXXXXX@c.us)
  */
 function formatPhone(phone) {
-  let cleaned = phone.replace(/\D/g, '');
-  if (!cleaned.startsWith('55')) {
+  let cleaned = String(phone || '').replace(/\D/g, '');
+  if (!cleaned) return '';
+  if (!cleaned.startsWith('55') && cleaned.length >= 10 && cleaned.length <= 11) {
     cleaned = '55' + cleaned;
   }
   return cleaned + '@c.us';
+}
+
+/**
+ * Resolve the real canonical WhatsApp chatId (JID) via WAHA check-exists.
+ * Fixes Brazilian 9th digit discrepancies where WhatsApp registered the account
+ * with or without the 9th digit (e.g. 557197434028@c.us vs 5571997434028@c.us).
+ */
+async function resolveChatId(phone, wahaUrl, session, apiKey) {
+  const fallback = formatPhone(phone);
+  if (!phone) return { chatId: fallback, exists: false };
+
+  let cleaned = String(phone).replace(/\D/g, '');
+  if (!cleaned.startsWith('55') && cleaned.length >= 10 && cleaned.length <= 11) {
+    cleaned = '55' + cleaned;
+  }
+
+  const reqHeaders = { 'Content-Type': 'application/json' };
+  if (apiKey) reqHeaders['X-Api-Key'] = apiKey;
+
+  try {
+    const res = await axios.get(`${wahaUrl}/api/contacts/check-exists`, {
+      headers: reqHeaders,
+      params: { session, phone: cleaned },
+      timeout: 6000,
+    });
+
+    if (res.data && res.data.numberExists && res.data.chatId) {
+      if (res.data.chatId !== fallback) {
+        console.log(`[WAHA] JID canônico resolvido para ${phone}: "${res.data.chatId}" (era "${fallback}")`);
+      }
+      return { chatId: res.data.chatId, exists: true };
+    }
+
+    // If not found and it's a Brazilian mobile (55 + 2 DDD + 9 digits = 13 digits)
+    // Try without the 9th digit (55 + 2 DDD + 8 digits = 12 digits)
+    if (cleaned.startsWith('55') && cleaned.length === 13) {
+      const without9 = cleaned.slice(0, 4) + cleaned.slice(5);
+      const resAlt = await axios.get(`${wahaUrl}/api/contacts/check-exists`, {
+        headers: reqHeaders,
+        params: { session, phone: without9 },
+        timeout: 6000,
+      });
+      if (resAlt.data && resAlt.data.numberExists && resAlt.data.chatId) {
+        console.log(`[WAHA] JID canônico resolvido alternando 9º dígito (${without9}): "${resAlt.data.chatId}"`);
+        return { chatId: resAlt.data.chatId, exists: true };
+      }
+    } else if (cleaned.startsWith('55') && cleaned.length === 12) {
+      // Try with 9th digit
+      const with9 = cleaned.slice(0, 4) + '9' + cleaned.slice(4);
+      const resAlt = await axios.get(`${wahaUrl}/api/contacts/check-exists`, {
+        headers: reqHeaders,
+        params: { session, phone: with9 },
+        timeout: 6000,
+      });
+      if (resAlt.data && resAlt.data.numberExists && resAlt.data.chatId) {
+        console.log(`[WAHA] JID canônico resolvido adicionando 9º dígito (${with9}): "${resAlt.data.chatId}"`);
+        return { chatId: resAlt.data.chatId, exists: true };
+      }
+    }
+
+    if (res.data && res.data.numberExists === false) {
+      return { chatId: fallback, exists: false };
+    }
+  } catch (err) {
+    console.warn(`[WAHA] Aviso ao verificar existência do número ${phone}: ${err.message}`);
+  }
+
+  return { chatId: fallback, exists: true };
 }
 
 /**
@@ -159,13 +228,23 @@ function buildMessage(cart) {
     .map((item) => {
       const title = item.title || item.name || item.productName || 'Produto';
       const qty = item.quantity || item.productQuantity || 1;
-      const priceCents = item.priceInCents || item.productPriceInCents || item.unitPrice || 0;
+      const priceCents = item.priceInCents || item.productPriceInCents || item.unitPriceInCents || item.unitPrice || 0;
       const price = (priceCents / 100).toFixed(2).replace('.', ',');
       return `  • ${title} (${qty}x) - R$ ${price}`;
     })
     .join('\n');
 
-  const totalAmount = (cart.amount / 100).toFixed(2).replace('.', ',');
+  let amountCents = Number(cart.amount) || 0;
+  if (amountCents <= 0 && items.length > 0) {
+    amountCents = items.reduce((sum, item) => {
+      const p = item.productPriceInCents || item.priceInCents || item.unitPriceInCents || item.price || item.unitPrice || 0;
+      const q = item.productQuantity || item.quantity || 1;
+      const priceVal = (Number(p) < 1000 && String(p).includes('.')) ? Math.round(Number(p) * 100) : Number(p);
+      return sum + (priceVal * Number(q));
+    }, 0);
+  }
+
+  const totalAmount = (amountCents / 100).toFixed(2).replace('.', ',');
   const firstName = cart.customer_name ? cart.customer_name.split(' ')[0] : 'cliente';
 
   return template
@@ -193,13 +272,23 @@ function buildPaidMessage(cart) {
     .map((item) => {
       const title = item.title || item.name || item.productName || 'Produto';
       const qty = item.quantity || item.productQuantity || 1;
-      const priceCents = item.priceInCents || item.productPriceInCents || item.unitPrice || 0;
+      const priceCents = item.priceInCents || item.productPriceInCents || item.unitPriceInCents || item.unitPrice || 0;
       const price = (priceCents / 100).toFixed(2).replace('.', ',');
       return `  • ${title} (${qty}x) - R$ ${price}`;
     })
     .join('\n');
 
-  const totalAmount = (cart.amount / 100).toFixed(2).replace('.', ',');
+  let amountCents = Number(cart.amount) || 0;
+  if (amountCents <= 0 && items.length > 0) {
+    amountCents = items.reduce((sum, item) => {
+      const p = item.productPriceInCents || item.priceInCents || item.unitPriceInCents || item.price || item.unitPrice || 0;
+      const q = item.productQuantity || item.quantity || 1;
+      const priceVal = (Number(p) < 1000 && String(p).includes('.')) ? Math.round(Number(p) * 100) : Number(p);
+      return sum + (priceVal * Number(q));
+    }, 0);
+  }
+
+  const totalAmount = (amountCents / 100).toFixed(2).replace('.', ',');
   const firstName = cart.customer_name ? cart.customer_name.split(' ')[0] : 'cliente';
 
   return template
@@ -219,7 +308,15 @@ async function sendWhatsAppMessage(phone, message) {
 
   // Resolve active session
   const session = await resolveWorkingSession(wahaUrl, apiKey, configuredSession);
-  const chatId = formatPhone(phone);
+
+  // Resolve canonical WhatsApp chatId (fixes 9th digit discrepancies)
+  const resolved = await resolveChatId(phone, wahaUrl, session, apiKey);
+  if (!resolved.exists) {
+    console.warn(`[WAHA] ⚠️ Número ${phone} (${resolved.chatId}) não possui conta de WhatsApp ativa.`);
+    return { success: false, error: 'Número não possui WhatsApp ativo', chatId: resolved.chatId };
+  }
+
+  const chatId = resolved.chatId;
 
   const headers = { 'Content-Type': 'application/json' };
   if (apiKey) {
@@ -244,18 +341,18 @@ async function sendWhatsAppMessage(phone, message) {
     // Stop typing indicator (fire-and-forget)
     axios.post(`${wahaUrl}/api/stopTyping`, { chatId, session }, { headers, timeout: 4000 }).catch(() => {});
 
-    return { success: true, data: response.data };
+    return { success: true, data: response.data, chatId };
   } catch (error) {
     const errorMsg = error.response
       ? JSON.stringify(error.response.data)
       : error.message;
 
-    console.error(`[WAHA] Erro ao enviar mensagem para ${phone}:`, errorMsg);
+    console.error(`[WAHA] Erro ao enviar mensagem para ${phone} (${chatId}):`, errorMsg);
 
     // Try to stop typing even on error
     axios.post(`${wahaUrl}/api/stopTyping`, { chatId, session }, { headers, timeout: 4000 }).catch(() => {});
 
-    return { success: false, error: errorMsg };
+    return { success: false, error: errorMsg, chatId };
   }
 }
 
@@ -396,6 +493,7 @@ module.exports = {
   buildPaidMessage,
   sendPaymentConfirmation,
   formatPhone,
+  resolveChatId,
   getSetting,
   setSetting,
   parseSpintax,
