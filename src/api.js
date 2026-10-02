@@ -195,6 +195,34 @@ router.delete('/carts/:id', (req, res) => {
   }
 });
 
+/**
+ * PATCH /api/carts/:id
+ * Update cart status/fields
+ */
+router.patch('/carts/:id', (req, res) => {
+  try {
+    const { status, payment_status, recovered } = req.body;
+    db.prepare(`
+      UPDATE abandoned_carts
+      SET status = COALESCE(?, status),
+          payment_status = COALESCE(?, payment_status),
+          recovered = COALESCE(?, recovered),
+          updated_at = datetime('now')
+      WHERE id = ?
+    `).run(
+      status || null,
+      payment_status || null,
+      recovered !== undefined ? Number(recovered) : null,
+      req.params.id
+    );
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('[API] Erro ao atualizar carrinho:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ============================================================
 // Settings
 // ============================================================

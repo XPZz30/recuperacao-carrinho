@@ -119,7 +119,7 @@ function handleTransactionPostback(payload) {
   const tx = payload.data || payload;
   if (!tx) return;
 
-  const status = (tx.status || '').toLowerCase();
+  const status = (tx.status || '').toLowerCase().trim();
   const txId = String(tx.id || tx.transactionId || tx.financialTransactionId || tx.orderId || Date.now());
 
   // If the transaction was paid, mark it as recovered
@@ -128,10 +128,11 @@ function handleTransactionPostback(payload) {
     return;
   }
 
-  // If the transaction is in a "pending" or "unpaid" state, schedule recovery
+  // If the transaction is in a "pending", "expired", "refused" or "unpaid" state, schedule recovery
   const pendingStatuses = [
     'waiting_payment', 'processing', 'refused', 'failed', 'pending',
-    'unpaid', 'awaiting_payment', 'not_paid', 'created', 'authorized'
+    'unpaid', 'awaiting_payment', 'not_paid', 'created', 'authorized',
+    'expired', 'canceled', 'cancelled'
   ];
   if (pendingStatuses.includes(status) || !status) {
     scheduleRecovery(tx, 'transaction');
@@ -148,11 +149,41 @@ function handleCheckoutPostback(payload) {
   const tx = checkout.transaction;
 
   // Check if checkout or transaction is paid / completed
-  const step = String(checkout.step || '').toUpperCase();
-  const status = String(checkout.status || (tx && tx.status) || '').toLowerCase();
-  const isPaid = status === 'paid' || status === 'approved' || status === 'completed' || status === 'success' ||
-                 step.includes('PAID') || step.includes('COMPLET') || step.includes('APPROVED') ||
-                 Boolean(checkout.recoveredAt);
+  const step = String(checkout.step || '').toUpperCase().trim();
+  const status = String(checkout.status || (tx && tx.status) || '').toLowerCase().trim();
+
+  // Explicit check: if step/status indicates uncompleted, expired, refused or cancelled payment
+  const isUnpaid = 
+    step.includes('NOT') || 
+    step.includes('REFUSED') || 
+    step.includes('FAILED') ||
+    step.includes('EXPIRED') ||
+    step.includes('CANCEL') ||
+    step === 'WAITING_PAYMENT' ||
+    step === 'PENDING' ||
+    step === 'UNPAID' ||
+    status === 'expired' ||
+    status === 'canceled' ||
+    status === 'cancelled' ||
+    status === 'refused' ||
+    status === 'failed' ||
+    status === 'waiting_payment' ||
+    status === 'pending' ||
+    status === 'unpaid';
+
+  // Strict check: only consider paid if NOT unpaid and explicitly matches paid status
+  const isPaid = !isUnpaid && (
+    status === 'paid' || 
+    status === 'approved' || 
+    status === 'completed' || 
+    status === 'success' ||
+    step === 'PAYMENT_COMPLETED' ||
+    step === 'PURCHASE_COMPLETED' ||
+    step === 'ORDER_COMPLETED' ||
+    step === 'PAID' ||
+    step === 'APPROVED' ||
+    (Boolean(checkout.recoveredAt) && String(checkout.recoveredAt).toLowerCase() !== 'null')
+  );
 
   if (isPaid) {
     const cartId = String(
@@ -298,6 +329,34 @@ function scheduleRecovery(tx, type, checkout = null) {
  * Mark a transaction as recovered (paid) and trigger WhatsApp payment confirmation
  */
 async function markAsRecovered(txId, tx = null) {
+  // Safety guard: reject if the object explicitly indicates an unpaid, cancelled, or expired state
+  if (tx) {
+    const txStatus = String(tx.status || '').toLowerCase().trim();
+    const txStep = String(tx.step || '').toUpperCase().trim();
+    const isUnpaid = 
+      txStep.includes('NOT') || 
+      txStep.includes('REFUSED') || 
+      txStep.includes('FAILED') ||
+      txStep.includes('EXPIRED') ||
+      txStep.includes('CANCEL') ||
+      txStep === 'WAITING_PAYMENT' ||
+      txStep === 'PENDING' ||
+      txStep === 'UNPAID' ||
+      txStatus === 'expired' ||
+      txStatus === 'canceled' ||
+      txStatus === 'cancelled' ||
+      txStatus === 'refused' ||
+      txStatus === 'failed' ||
+      txStatus === 'waiting_payment' ||
+      txStatus === 'pending' ||
+      txStatus === 'unpaid';
+
+    if (isUnpaid) {
+      console.warn(`[Webhook] Bloqueado: tentativa de marcar como pago um pedido não pago (status="${txStatus}", step="${txStep}")`);
+      return;
+    }
+  }
+
   const candidates = [
     txId,
     tx && tx.abandonedCartId,
