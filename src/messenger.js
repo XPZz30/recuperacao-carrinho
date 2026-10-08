@@ -1,5 +1,6 @@
 const axios = require('axios');
 const db = require('./database');
+const { getCleanPhone, isSameCustomerPhone, isSameOrder } = require('./utils');
 
 /**
  * Get a setting value from the database
@@ -357,49 +358,172 @@ async function sendWhatsAppMessage(phone, message) {
 }
 
 /**
- * Process a single abandoned cart - send recovery message
+ * Check if a recovery message was sent to this customer in the last X hours (cooldown)
+ */
+function hasRecentRecoveryMessage(phone, cooldownHours = 4) {
+  if (!phone) return false;
+  const clean = getCleanPhone(phone);
+  if (clean.length < 8) return false;
+  const last8 = clean.slice(-8);
+
+  const hoursStr = String(cooldownHours);
+
+  // Check message_log for recovery messages
+  const recentLog = db.prepare(`
+    SELECT ml.id, ml.sent_at 
+    FROM message_log ml
+    WHERE (ml.phone LIKE ? OR ml.phone LIKE ?)
+      AND ml.status = 'sent'
+      AND ml.sent_at >= datetime('now', '-' || ? || ' hours')
+      AND ml.message NOT LIKE '%confirmado%'
+      AND ml.message NOT LIKE '%Muito obrigado%'
+    ORDER BY ml.sent_at DESC
+    LIMIT 1
+  `).get(`%${last8}%`, `%${clean}%`, hoursStr);
+
+  if (recentLog) return true;
+
+  // Check abandoned_carts where message_sent = 1
+  const recentCart = db.prepare(`
+    SELECT id, message_sent_at
+    FROM abandoned_carts
+    WHERE (customer_phone LIKE ? OR customer_phone LIKE ?)
+      AND message_sent = 1
+      AND message_sent_at >= datetime('now', '-' || ? || ' hours')
+    ORDER BY message_sent_at DESC
+    LIMIT 1
+  `).get(`%${last8}%`, `%${clean}%`, hoursStr);
+
+  if (recentCart) return true;
+
+  return false;
+}
+
+/**
+ * Check if customer already paid for this order in another cart (within last 48h)
+ */
+function isCustomerOrderAlreadyPaid(cart) {
+  if (!cart || !cart.customer_phone) return null;
+  const phone = cart.customer_phone;
+  const clean = getCleanPhone(phone);
+  if (clean.length < 8) return null;
+  const last8 = clean.slice(-8);
+
+  const paidCarts = db.prepare(`
+    SELECT * FROM abandoned_carts
+    WHERE (recovered = 1 OR payment_status = 'paid')
+      AND (customer_phone LIKE ? OR customer_phone LIKE ?)
+      AND created_at >= datetime('now', '-48 hours')
+    ORDER BY created_at DESC
+  `).all(`%${last8}%`, `%${clean}%`);
+
+  for (const p of paidCarts) {
+    if (isSameCustomerPhone(p.customer_phone, phone) || (cart.customer_email && p.customer_email && cart.customer_email.toLowerCase() === p.customer_email.toLowerCase())) {
+      if (isSameOrder(cart, p)) {
+        return p;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Process a single abandoned cart - send recovery message with retry safety
  */
 async function processCart(cart) {
   console.log(`[Processando] Carrinho #${cart.id} - ${cart.customer_name} (${cart.customer_phone})`);
 
-  const message = buildMessage(cart);
-  const result = await sendWhatsAppMessage(cart.customer_phone, message);
+  try {
+    const message = buildMessage(cart);
+    const result = await sendWhatsAppMessage(cart.customer_phone, message);
 
-  // Log the message
-  const logStmt = db.prepare(`
-    INSERT INTO message_log (cart_id, phone, message, status, error_message, waha_response)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `);
+    // Log the message
+    const logStmt = db.prepare(`
+      INSERT INTO message_log (cart_id, phone, message, status, error_message, waha_response)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
 
-  logStmt.run(
-    cart.id,
-    cart.customer_phone,
-    message,
-    result.success ? 'sent' : 'failed',
-    result.success ? null : result.error,
-    result.success ? JSON.stringify(result.data) : null
-  );
+    logStmt.run(
+      cart.id,
+      cart.customer_phone,
+      message,
+      result.success ? 'sent' : 'failed',
+      result.success ? null : result.error,
+      result.success ? JSON.stringify(result.data) : null
+    );
 
-  // Update cart status
-  const updateStmt = db.prepare(`
-    UPDATE abandoned_carts
-    SET message_sent = 1,
-        message_sent_at = datetime('now'),
-        status = ?,
-        updated_at = datetime('now')
-    WHERE id = ?
-  `);
+    // Update cart status
+    if (result.success) {
+      db.prepare(`
+        UPDATE abandoned_carts
+        SET message_sent = 1,
+            message_sent_at = datetime('now'),
+            status = 'sent',
+            retry_count = 0,
+            updated_at = datetime('now')
+        WHERE id = ?
+      `).run(cart.id);
 
-  updateStmt.run(result.success ? 'sent' : 'failed', cart.id);
+      console.log(`[✓] Mensagem enviada com sucesso para ${cart.customer_phone}`);
+    } else {
+      const retries = (cart.retry_count || 0) + 1;
+      const isFinalFail = retries >= 3;
 
-  if (result.success) {
-    console.log(`[✓] Mensagem enviada com sucesso para ${cart.customer_phone}`);
-  } else {
-    console.log(`[✗] Falha ao enviar mensagem para ${cart.customer_phone}: ${result.error}`);
+      db.prepare(`
+        UPDATE abandoned_carts
+        SET message_sent = ?,
+            status = ?,
+            retry_count = ?,
+            cancel_reason = ?,
+            scheduled_at = CASE WHEN ? = 0 THEN datetime('now', '+10 minutes') ELSE scheduled_at END,
+            updated_at = datetime('now')
+        WHERE id = ?
+      `).run(
+        isFinalFail ? 1 : 0,
+        isFinalFail ? 'failed' : 'pending',
+        retries,
+        isFinalFail ? `Falhou após 3 tentativas: ${result.error}` : null,
+        isFinalFail ? 1 : 0,
+        cart.id
+      );
+
+      console.log(`[✗] Falha ao enviar mensagem para ${cart.customer_phone} (tentativa ${retries}/3): ${result.error}`);
+    }
+
+    return result;
+  } catch (error) {
+    console.error(`[Processando] Erro inesperado ao processar carrinho #${cart.id}:`, error.message);
+    const retries = (cart.retry_count || 0) + 1;
+    const isFinalFail = retries >= 3;
+
+    try {
+      db.prepare(`
+        UPDATE abandoned_carts
+        SET message_sent = ?,
+            status = ?,
+            retry_count = ?,
+            cancel_reason = ?,
+            scheduled_at = CASE WHEN ? = 0 THEN datetime('now', '+10 minutes') ELSE scheduled_at END,
+            updated_at = datetime('now')
+        WHERE id = ?
+      `).run(
+        isFinalFail ? 1 : 0,
+        isFinalFail ? 'failed' : 'pending',
+        retries,
+        `Erro inesperado: ${error.message}`,
+        isFinalFail ? 1 : 0,
+        cart.id
+      );
+    } catch (dbErr) {
+      console.error('[Processando] Erro ao salvar falha no banco:', dbErr.message);
+    }
+
+    return { success: false, error: error.message };
   }
-
-  return result;
 }
+
+// Global lock to prevent overlapping runs from 1-minute cron
+let isProcessingCarts = false;
 
 /**
  * Check and process all pending carts that are due with human jitter delays
@@ -410,38 +534,122 @@ async function processPendingCarts() {
     return;
   }
 
-  // Anti-Ban: Check quiet hours (e.g. 23:00 - 08:00)
-  if (isQuietHours()) {
-    console.log('[Anti-Ban] 🌙 Horário de silêncio ativo. Disparos de carrinho pausados durante a noite para evitar denúncias de spam.');
+  // Mutex lock to prevent overlapping runs from 1-minute cron
+  if (isProcessingCarts) {
+    console.log('[Scheduler] ⏳ Processamento anterior ainda em execução. Aguardando próximo ciclo...');
     return;
   }
+  isProcessingCarts = true;
 
-  const pendingCarts = db.prepare(`
-    SELECT * FROM abandoned_carts
-    WHERE status = 'pending'
-      AND message_sent = 0
-      AND recovered = 0
-      AND datetime(scheduled_at) <= datetime('now')
-    ORDER BY scheduled_at ASC
-  `).all();
-
-  if (pendingCarts.length > 0) {
-    console.log(`[Scheduler] ${pendingCarts.length} carrinho(s) pendente(s) para processar`);
-  }
-
-  const minDelaySec = parseInt(getSetting('anti_ban_delay_min') || '8', 10);
-  const maxDelaySec = parseInt(getSetting('anti_ban_delay_max') || '18', 10);
-
-  for (let i = 0; i < pendingCarts.length; i++) {
-    const cart = pendingCarts[i];
-    await processCart(cart);
-
-    // If more carts remain in batch, apply human random delay between messages
-    if (i < pendingCarts.length - 1) {
-      const jitterMs = Math.floor(Math.random() * ((maxDelaySec - minDelaySec) * 1000 + 1)) + (minDelaySec * 1000);
-      console.log(`[Anti-Ban] ⏳ Aguardando delay humano de ${(jitterMs / 1000).toFixed(1)}s antes do próximo envio...`);
-      await new Promise((resolve) => setTimeout(resolve, jitterMs));
+  try {
+    // Anti-Ban: Check quiet hours (e.g. 23:00 - 08:00)
+    if (isQuietHours()) {
+      console.log('[Anti-Ban] 🌙 Horário de silêncio ativo. Disparos de carrinho pausados durante a noite para evitar denúncias de spam.');
+      return;
     }
+
+    // Expire ancient carts so old carts don't fire in a sudden burst after restart or downtime
+    const maxAgeHours = parseInt(getSetting('cart_max_age_hours') || '12', 10);
+    try {
+      const expiredInfo = db.prepare(`
+        UPDATE abandoned_carts
+        SET status = 'expired',
+            cancel_reason = 'Tempo limite de recuperação excedido (' || ? || 'h)',
+            updated_at = datetime('now')
+        WHERE status = 'pending'
+          AND message_sent = 0
+          AND datetime(scheduled_at) < datetime('now', '-' || ? || ' hours')
+      `).run(maxAgeHours, maxAgeHours);
+
+      if (expiredInfo.changes > 0) {
+        console.log(`[Scheduler] ⚠️ ${expiredInfo.changes} carrinho(s) antigo(s) expirados para evitar disparos em lote.`);
+      }
+    } catch (e) {
+      console.error('[Scheduler] Erro ao expirar carrinhos antigos:', e.message);
+    }
+
+    const pendingCarts = db.prepare(`
+      SELECT * FROM abandoned_carts
+      WHERE status = 'pending'
+        AND message_sent = 0
+        AND recovered = 0
+        AND datetime(scheduled_at) <= datetime('now')
+      ORDER BY scheduled_at ASC
+      LIMIT 10
+    `).all();
+
+    if (pendingCarts.length > 0) {
+      console.log(`[Scheduler] ${pendingCarts.length} carrinho(s) pendente(s) para processar`);
+    }
+
+    const cooldownHours = parseInt(getSetting('cart_cooldown_hours') || '4', 10);
+    const minDelaySec = parseInt(getSetting('anti_ban_delay_min') || '8', 10);
+    const maxDelaySec = parseInt(getSetting('anti_ban_delay_max') || '18', 10);
+
+    for (let i = 0; i < pendingCarts.length; i++) {
+      const cart = pendingCarts[i];
+
+      // Condition 1: Check if customer already completed/paid this order in another cart
+      const paidMatch = isCustomerOrderAlreadyPaid(cart);
+      if (paidMatch) {
+        console.log(`[Scheduler] 🚫 Carrinho #${cart.id} CANCELADO: cliente (${cart.customer_phone}) já concluiu o pedido no carrinho #${paidMatch.id}`);
+        db.prepare(`
+          UPDATE abandoned_carts
+          SET status = 'cancelled',
+              payment_status = 'cancelled_paid_elsewhere',
+              cancel_reason = ?,
+              updated_at = datetime('now')
+          WHERE id = ?
+        `).run(`Cliente concluiu a compra no carrinho #${paidMatch.id}`, cart.id);
+
+        try {
+          db.prepare(`
+            INSERT INTO message_log (cart_id, phone, message, status, error_message, sent_at)
+            VALUES (?, ?, ?, 'cancelled', 'Cancelado: cliente concluiu a compra em outro carrinho', datetime('now'))
+          `).run(
+            cart.id,
+            cart.customer_phone,
+            `[Sistema] Envio cancelado: cliente concluiu a compra no carrinho #${paidMatch.id} com o mesmo pedido.`
+          );
+        } catch (e) {}
+        continue;
+      }
+
+      // Condition 2: Cooldown limit - send only 1 recovery message every 4 hours per customer
+      if (hasRecentRecoveryMessage(cart.customer_phone, cooldownHours)) {
+        console.log(`[Cooldown] ⏱️ Carrinho #${cart.id} CANCELADO: cliente (${cart.customer_phone}) já recebeu mensagem nas últimas ${cooldownHours}h.`);
+        db.prepare(`
+          UPDATE abandoned_carts
+          SET status = 'cancelled',
+              cancel_reason = ?,
+              updated_at = datetime('now')
+          WHERE id = ?
+        `).run(`Limite de 1 mensagem a cada ${cooldownHours}h atingido`, cart.id);
+
+        try {
+          db.prepare(`
+            INSERT INTO message_log (cart_id, phone, message, status, error_message, sent_at)
+            VALUES (?, ?, ?, 'cancelled', 'Cancelado: limite de 1 mensagem a cada 4h atingido', datetime('now'))
+          `).run(
+            cart.id,
+            cart.customer_phone,
+            `[Sistema] Envio cancelado: cliente já recebeu mensagem de recuperação nas últimas ${cooldownHours} horas.`
+          );
+        } catch (e) {}
+        continue;
+      }
+
+      await processCart(cart);
+
+      // If more carts remain in batch, apply human random delay between messages
+      if (i < pendingCarts.length - 1) {
+        const jitterMs = Math.floor(Math.random() * ((maxDelaySec - minDelaySec) * 1000 + 1)) + (minDelaySec * 1000);
+        console.log(`[Anti-Ban] ⏳ Aguardando delay humano de ${(jitterMs / 1000).toFixed(1)}s antes do próximo envio...`);
+        await new Promise((resolve) => setTimeout(resolve, jitterMs));
+      }
+    }
+  } finally {
+    isProcessingCarts = false;
   }
 }
 
@@ -499,4 +707,6 @@ module.exports = {
   parseSpintax,
   isQuietHours,
   resolveWorkingSession,
+  hasRecentRecoveryMessage,
+  isCustomerOrderAlreadyPaid,
 };

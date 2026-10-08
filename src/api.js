@@ -18,6 +18,8 @@ router.get('/stats', (req, res) => {
     const sentCarts = db.prepare("SELECT COUNT(*) as count FROM abandoned_carts WHERE status = 'sent'").get().count;
     const recoveredCarts = db.prepare("SELECT COUNT(*) as count FROM abandoned_carts WHERE recovered = 1").get().count;
     const failedCarts = db.prepare("SELECT COUNT(*) as count FROM abandoned_carts WHERE status = 'failed'").get().count;
+    const cancelledCarts = db.prepare("SELECT COUNT(*) as count FROM abandoned_carts WHERE status = 'cancelled'").get().count;
+    const expiredCarts = db.prepare("SELECT COUNT(*) as count FROM abandoned_carts WHERE status = 'expired'").get().count;
 
     const totalAmount = db.prepare('SELECT COALESCE(SUM(amount), 0) as total FROM abandoned_carts').get().total;
     const recoveredAmount = db.prepare('SELECT COALESCE(SUM(amount), 0) as total FROM abandoned_carts WHERE recovered = 1').get().total;
@@ -41,6 +43,8 @@ router.get('/stats', (req, res) => {
       sentCarts,
       recoveredCarts,
       failedCarts,
+      cancelledCarts,
+      expiredCarts,
       totalAmount,
       recoveredAmount,
       recoveryRate,

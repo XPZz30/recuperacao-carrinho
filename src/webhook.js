@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('./database');
 const { getSetting } = require('./messenger');
+const { getCleanPhone, isSameCustomerPhone, isSameOrder } = require('./utils');
 
 const router = express.Router();
 
@@ -113,6 +114,108 @@ function extractAmount(obj, items = []) {
 }
 
 /**
+ * Check if the customer already has a paid order matching these items/amount in the last 48h
+ */
+function hasCustomerPaidOrder(phone, items, amount, email = null) {
+  if (!phone) return null;
+  const clean = getCleanPhone(phone);
+  if (clean.length < 8) return null;
+  const last8 = clean.slice(-8);
+
+  const paidCarts = db.prepare(`
+    SELECT * FROM abandoned_carts
+    WHERE (recovered = 1 OR payment_status = 'paid')
+      AND created_at >= datetime('now', '-48 hours')
+      AND (customer_phone LIKE ? OR customer_phone LIKE ?)
+    ORDER BY created_at DESC
+  `).all(`%${last8}%`, `%${clean}%`);
+
+  for (const p of paidCarts) {
+    if (isSameCustomerPhone(p.customer_phone, phone) || (email && p.customer_email && p.customer_email.toLowerCase() === email.toLowerCase())) {
+      if (isSameOrder(p, items, amount)) {
+        return p;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Find an existing pending cart for this customer with the same order to avoid duplicate entries
+ */
+function findPendingCartForCustomer(phone, items, amount, email = null) {
+  if (!phone) return null;
+  const clean = getCleanPhone(phone);
+  if (clean.length < 8) return null;
+  const last8 = clean.slice(-8);
+
+  const pendingCarts = db.prepare(`
+    SELECT * FROM abandoned_carts
+    WHERE status = 'pending'
+      AND created_at >= datetime('now', '-24 hours')
+      AND (customer_phone LIKE ? OR customer_phone LIKE ?)
+    ORDER BY created_at DESC
+  `).all(`%${last8}%`, `%${clean}%`);
+
+  for (const p of pendingCarts) {
+    if (isSameCustomerPhone(p.customer_phone, phone) || (email && p.customer_email && p.customer_email.toLowerCase() === email.toLowerCase())) {
+      if (isSameOrder(p, items, amount)) {
+        return p;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Cancel any pending carts for a customer who completed/paid an order
+ */
+function cancelPendingCartsForPaidOrder(paidCart, tx = null) {
+  if (!paidCart || !paidCart.customer_phone) return;
+  const phone = paidCart.customer_phone;
+  const clean = getCleanPhone(phone);
+  if (clean.length < 8) return;
+  const last8 = clean.slice(-8);
+
+  const candidatePending = db.prepare(`
+    SELECT * FROM abandoned_carts
+    WHERE status = 'pending'
+      AND id != ?
+      AND (customer_phone LIKE ? OR customer_phone LIKE ?)
+  `).all(paidCart.id, `%${last8}%`, `%${clean}%`);
+
+  for (const pending of candidatePending) {
+    const isSameCust = isSameCustomerPhone(pending.customer_phone, phone) ||
+      (paidCart.customer_email && pending.customer_email && paidCart.customer_email.toLowerCase() === pending.customer_email.toLowerCase());
+
+    if (isSameCust && isSameOrder(pending, paidCart)) {
+      console.log(`[Webhook] 🚫 Carrinho pendente #${pending.id} CANCELADO: cliente (${phone}) concluiu a compra no carrinho #${paidCart.id} (tx: ${paidCart.transaction_id})`);
+      db.prepare(`
+        UPDATE abandoned_carts
+        SET status = 'cancelled',
+            payment_status = 'cancelled_paid_elsewhere',
+            cancel_reason = ?,
+            updated_at = datetime('now')
+        WHERE id = ?
+      `).run(`Cliente concluiu a compra no carrinho #${paidCart.id}`, pending.id);
+
+      try {
+        db.prepare(`
+          INSERT INTO message_log (cart_id, phone, message, status, error_message, sent_at)
+          VALUES (?, ?, ?, 'cancelled', 'Cancelado: cliente concluiu a compra em outro carrinho', datetime('now'))
+        `).run(
+          pending.id,
+          pending.customer_phone,
+          `[Sistema] Envio de recuperação cancelado: cliente concluiu a compra no carrinho #${paidCart.id} com o mesmo pedido.`
+        );
+      } catch (e) {
+        console.error('[Webhook] Erro ao registrar log de cancelamento:', e.message);
+      }
+    }
+  }
+}
+
+/**
  * Handle a transaction postback from Bestfy
  */
 function handleTransactionPostback(payload) {
@@ -214,6 +317,16 @@ function handleCheckoutPostback(payload) {
     return;
   }
 
+  const items = checkout.items || checkout.cartItems || checkout.products || [];
+  const amount = extractAmount(checkout, items);
+
+  // 1. Condition 1: Check if customer already paid this order in another cart
+  const alreadyPaid = hasCustomerPaidOrder(phone, items, amount, customer.email);
+  if (alreadyPaid) {
+    console.log(`[Webhook] Ignorando agendamento para ${phone}: cliente já concluiu e pagou o pedido no carrinho #${alreadyPaid.id}`);
+    return;
+  }
+
   const cartId = String(checkout.abandonedCartId || checkout.id || checkout.checkoutId || `cart_${Date.now()}`);
   const existing = db.prepare('SELECT id, status FROM abandoned_carts WHERE checkout_id = ? OR transaction_id = ?').get(cartId, cartId);
   if (existing) {
@@ -224,8 +337,36 @@ function handleCheckoutPostback(payload) {
   const delayMinutes = parseInt(getSetting('recovery_delay_minutes') || process.env.RECOVERY_DELAY_MINUTES || '30');
   const scheduledAt = new Date(Date.now() + delayMinutes * 60 * 1000).toISOString();
   const secureUrl = checkout.recoveryUrl || checkout.secureUrl || checkout.url || checkout.checkoutUrl || '';
-  const items = checkout.items || checkout.cartItems || checkout.products || [];
-  const amount = extractAmount(checkout, items);
+
+  // 2. Deduplicate: if customer already has a pending cart with same order, update it and push delay forward
+  const existingPending = findPendingCartForCustomer(phone, items, amount, customer.email);
+  if (existingPending) {
+    const updateAmount = (!existingPending.amount || existingPending.amount === 0) && amount > 0;
+    const updateItems = (!existingPending.items_json || existingPending.items_json === '[]') && items.length > 0;
+    db.prepare(`
+      UPDATE abandoned_carts
+      SET checkout_id = COALESCE(?, checkout_id),
+          secure_url = CASE WHEN ? != '' THEN ? ELSE secure_url END,
+          amount = CASE WHEN ? > 0 THEN ? ELSE amount END,
+          items_json = CASE WHEN ? = 1 THEN ? ELSE items_json END,
+          scheduled_at = ?,
+          retry_count = 0,
+          updated_at = datetime('now')
+      WHERE id = ?
+    `).run(
+      cartId,
+      secureUrl,
+      secureUrl,
+      updateAmount ? amount : 0,
+      amount,
+      updateItems ? 1 : 0,
+      JSON.stringify(items),
+      scheduledAt,
+      existingPending.id
+    );
+    console.log(`[Webhook] Carrinho pendente #${existingPending.id} atualizado com nova tentativa do cliente (${phone}) - reagendado para ${delayMinutes}min`);
+    return;
+  }
 
   const stmt = db.prepare(`
     INSERT INTO abandoned_carts (
@@ -266,6 +407,13 @@ function scheduleRecovery(tx, type, checkout = null) {
   const items = tx.items || tx.cartItems || (checkout ? (checkout.items || checkout.cartItems || checkout.products) : []) || [];
   const amount = extractAmount(tx, items) || (checkout ? extractAmount(checkout, items) : 0);
 
+  // 1. Condition 1: Check if customer already paid this order in another cart
+  const alreadyPaid = hasCustomerPaidOrder(phone, items, amount, customer.email);
+  if (alreadyPaid) {
+    console.log(`[Webhook] Ignorando agendamento de transação ${txId} para ${phone}: cliente já concluiu e pagou o pedido no carrinho #${alreadyPaid.id}`);
+    return;
+  }
+
   // Check if we already have this cart
   const existing = db.prepare('SELECT id, status, amount FROM abandoned_carts WHERE transaction_id = ?').get(txId);
   if (existing) {
@@ -299,6 +447,40 @@ function scheduleRecovery(tx, type, checkout = null) {
   let secureUrl = tx.secureUrl || tx.url || tx.pixQrCodeUrl || tx.paymentUrl || '';
   if (checkout && (checkout.secureUrl || checkout.recoveryUrl || checkout.url)) {
     secureUrl = checkout.secureUrl || checkout.recoveryUrl || checkout.url;
+  }
+
+  // 2. Deduplicate: if customer already has a pending cart with same order, update it and push delay forward
+  const existingPending = findPendingCartForCustomer(phone, items, amount, customer.email);
+  if (existingPending) {
+    const updateAmount = (!existingPending.amount || existingPending.amount === 0) && amount > 0;
+    const updateItems = (!existingPending.items_json || existingPending.items_json === '[]') && items.length > 0;
+    db.prepare(`
+      UPDATE abandoned_carts
+      SET transaction_id = ?,
+          checkout_id = COALESCE(?, checkout_id),
+          secure_url = CASE WHEN ? != '' THEN ? ELSE secure_url END,
+          amount = CASE WHEN ? > 0 THEN ? ELSE amount END,
+          items_json = CASE WHEN ? = 1 THEN ? ELSE items_json END,
+          payment_status = ?,
+          scheduled_at = ?,
+          retry_count = 0,
+          updated_at = datetime('now')
+      WHERE id = ?
+    `).run(
+      txId,
+      checkout ? String(checkout.id || checkout.checkoutId || '') : null,
+      secureUrl,
+      secureUrl,
+      updateAmount ? amount : 0,
+      amount,
+      updateItems ? 1 : 0,
+      JSON.stringify(items),
+      tx.status || 'waiting_payment',
+      scheduledAt,
+      existingPending.id
+    );
+    console.log(`[Webhook] Carrinho pendente #${existingPending.id} atualizado com nova transação ${txId} para ${phone} - reagendado para ${delayMinutes}min`);
+    return;
   }
 
   const stmt = db.prepare(`
@@ -374,23 +556,6 @@ async function markAsRecovered(txId, tx = null) {
     if (cart) break;
   }
 
-  // Fallback: match by customer phone if there is a pending cart
-  if (!cart && tx) {
-    const customer = extractCustomer(tx);
-    const phone = extractPhone(customer, tx);
-    if (phone) {
-      const cleanPhone = phone.replace(/\D/g, '');
-      if (cleanPhone.length >= 8) {
-        cart = db.prepare(`
-          SELECT * FROM abandoned_carts 
-          WHERE (customer_phone LIKE ? OR customer_phone LIKE ?)
-            AND status = 'pending'
-          ORDER BY created_at DESC LIMIT 1
-        `).get(`%${cleanPhone}%`, `%${cleanPhone.slice(-8)}%`);
-      }
-    }
-  }
-
   const items = (tx && (tx.items || tx.cartItems || tx.products)) || [];
   const amount = extractAmount(tx, items);
 
@@ -446,6 +611,9 @@ async function markAsRecovered(txId, tx = null) {
   }
 
   console.log(`[Webhook] 🎉 Transação ${txId} PAGA / RECUPERADA!`);
+
+  // Condition 1: Cancel any other pending carts for this customer with the same order
+  cancelPendingCartsForPaidOrder(cart, tx);
 
   // Send WhatsApp payment confirmation
   if (cart && cart.customer_phone) {

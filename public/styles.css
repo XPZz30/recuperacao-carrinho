@@ -624,6 +624,8 @@ body {
 .badge-sent { background: var(--info-bg); color: var(--info); }
 .badge-recovered { background: var(--success-bg); color: var(--success); }
 .badge-failed { background: var(--danger-bg); color: var(--danger); }
+.badge-cancelled { background: rgba(148, 163, 184, 0.15); color: #94a3b8; }
+.badge-expired { background: rgba(100, 116, 139, 0.15); color: #64748b; }
 
 .badge::before {
   content: '';

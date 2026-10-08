@@ -295,6 +295,8 @@
       $('#quietHoursLabel').textContent = settings.quiet_hours_active !== 'false' ? 'Ativo (Pausa carrinhos das 23h às 08h para evitar denúncias)' : 'Inativo';
       $('#settingDelayMin').value = settings.anti_ban_delay_min || '8';
       $('#settingDelayMax').value = settings.anti_ban_delay_max || '18';
+      if ($('#settingCooldownHours')) $('#settingCooldownHours').value = settings.cart_cooldown_hours || '4';
+      if ($('#settingMaxAgeHours')) $('#settingMaxAgeHours').value = settings.cart_max_age_hours || '12';
 
       updateMessagePreview();
       updatePaidMessagePreview();
@@ -320,6 +322,8 @@
         quiet_hours_active: $('#settingQuietHours').checked ? 'true' : 'false',
         anti_ban_delay_min: $('#settingDelayMin').value,
         anti_ban_delay_max: $('#settingDelayMax').value,
+        cart_cooldown_hours: $('#settingCooldownHours') ? $('#settingCooldownHours').value : '4',
+        cart_max_age_hours: $('#settingMaxAgeHours') ? $('#settingMaxAgeHours').value : '12',
       };
 
       await api('/api/settings', {
@@ -432,6 +436,7 @@
         <div class="detail-row"><span class="detail-label">Valor</span><span class="detail-value" style="color: var(--success); font-weight: 700;">${cart.amount_formatted}</span></div>
         <div class="detail-row"><span class="detail-label">Status Pagamento</span><span class="detail-value">${escHtml(cart.payment_status)}</span></div>
         <div class="detail-row"><span class="detail-label">Status</span><span class="detail-value">${getBadge(cart.status)}</span></div>
+        ${cart.cancel_reason ? `<div class="detail-row"><span class="detail-label">Motivo do Cancelamento</span><span class="detail-value" style="color: var(--warning); font-weight: 500;">${escHtml(cart.cancel_reason)}</span></div>` : ''}
         <div class="detail-row"><span class="detail-label">Agendado para</span><span class="detail-value">${formatDate(cart.scheduled_at)}</span></div>
         <div class="detail-row"><span class="detail-label">Criado em</span><span class="detail-value">${formatDate(cart.created_at)}</span></div>
         ${cart.secure_url ? `<div class="detail-row"><span class="detail-label">Link de Pagamento</span><span class="detail-value"><a href="${escHtml(cart.secure_url)}" target="_blank" style="color: var(--accent)">Abrir →</a></span></div>` : ''}
@@ -465,6 +470,8 @@
       sent: '<span class="badge badge-sent">Enviado</span>',
       recovered: '<span class="badge badge-recovered">Recuperado</span>',
       failed: '<span class="badge badge-failed">Falhou</span>',
+      cancelled: '<span class="badge badge-cancelled">Cancelado</span>',
+      expired: '<span class="badge badge-expired">Expirado</span>',
     };
     return map[status] || `<span class="badge">${status}</span>`;
   }

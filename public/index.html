@@ -204,6 +204,8 @@
               <option value="pending">Pendentes</option>
               <option value="sent">Enviados</option>
               <option value="recovered">Recuperados</option>
+              <option value="cancelled">Cancelados</option>
+              <option value="expired">Expirados</option>
               <option value="failed">Falharam</option>
             </select>
             <div class="search-box">
@@ -335,6 +337,18 @@
               </div>
             </div>
             <small class="form-help">Varia aleatoriamente o tempo entre envios consecutivos, quebrando qualquer padrão robótico.</small>
+            <div class="form-group" style="display: flex; gap: 16px; margin-top: 16px;">
+              <div style="flex: 1;">
+                <label for="settingCooldownHours">Intervalo por Cliente (horas)</label>
+                <input type="number" id="settingCooldownHours" min="1" max="72" value="4" class="form-input">
+                <small class="form-help">Envia no máximo 1 mensagem por cliente a cada X horas</small>
+              </div>
+              <div style="flex: 1;">
+                <label for="settingMaxAgeHours">Validade Máxima (horas)</label>
+                <input type="number" id="settingMaxAgeHours" min="1" max="48" value="12" class="form-input">
+                <small class="form-help">Expira carrinhos mais antigos para evitar disparos em lote</small>
+              </div>
+            </div>
           </div>
 
           <div class="settings-section">
