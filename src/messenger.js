@@ -214,8 +214,8 @@ async function simulateTyping(wahaUrl, session, apiKey, chatId, message) {
 /**
  * Build the recovery message from template with Spintax
  */
-function buildMessage(cart) {
-  const rawTemplate = getSetting('recovery_message') || process.env.RECOVERY_MESSAGE || '';
+function buildMessage(cart, settingKey = 'recovery_message') {
+  const rawTemplate = getSetting(settingKey) || (settingKey === 'recovery_message' ? process.env.RECOVERY_MESSAGE : '') || '';
   const template = parseSpintax(rawTemplate);
 
   let items = [];
@@ -522,6 +522,244 @@ async function processCart(cart) {
   }
 }
 
+/**
+ * Mark a cart's follow-up as handled (1 = sent, 2 = skipped/failed) and log the reason
+ */
+function markFollowUp(cart, state, logMessage, logStatus, errorMessage) {
+  db.prepare(`
+    UPDATE abandoned_carts
+    SET followup_sent = ?,
+        followup_sent_at = datetime('now'),
+        updated_at = datetime('now')
+    WHERE id = ?
+  `).run(state, cart.id);
+
+  if (logMessage) {
+    try {
+      db.prepare(`
+        INSERT INTO message_log (cart_id, phone, message, status, error_message)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(cart.id, cart.customer_phone, logMessage, logStatus, errorMessage || null);
+    } catch (e) {}
+  }
+}
+
+// Carts eligible for the 2nd message (first message sent, not paid, follow-up not handled yet)
+const FOLLOWUP_BASE_WHERE = `
+  status = 'sent'
+  AND message_sent = 1
+  AND recovered = 0
+  AND COALESCE(followup_sent, 0) = 0
+  AND message_sent_at IS NOT NULL
+`;
+
+/**
+ * Any paid cart from the same customer created after this cart (any order)
+ */
+function findLaterPurchase(cart) {
+  const clean = getCleanPhone(cart.customer_phone);
+  if (clean.length < 8) return null;
+  const candidates = db.prepare(`
+    SELECT * FROM abandoned_carts
+    WHERE id != ?
+      AND (recovered = 1 OR payment_status = 'paid')
+      AND (customer_phone LIKE ? OR customer_phone LIKE ?)
+      AND datetime(created_at) >= datetime(?)
+  `).all(cart.id, `%${clean.slice(-8)}%`, `%${clean}%`, cart.created_at);
+  return candidates.find((p) => isSameCustomerPhone(p.customer_phone, cart.customer_phone)) || null;
+}
+
+/**
+ * Count carts that a backfill of the last `days` days would cover (before per-customer filters)
+ */
+function countFollowUpBackfill(days) {
+  const delayHours = Math.max(1, parseInt(getSetting('followup_delay_hours') || '3', 10));
+  const rows = db.prepare(`
+    SELECT customer_phone FROM abandoned_carts
+    WHERE ${FOLLOWUP_BASE_WHERE}
+      AND datetime(message_sent_at) <= datetime('now', '-' || ? || ' hours')
+      AND datetime(message_sent_at) >= datetime('now', '-' || ? || ' days')
+  `).all(delayHours, days);
+  const customers = new Set(rows.map((r) => getCleanPhone(r.customer_phone).slice(-8)));
+  return { carts: rows.length, customers: customers.size };
+}
+
+/**
+ * Send the second (follow-up) message to carts whose first recovery message
+ * was sent `followup_delay_hours` ago and that still haven't been paid.
+ */
+async function processFollowUps(minDelaySec, maxDelaySec) {
+  if (getSetting('followup_active') === 'false') return;
+  if (!getSetting('followup_message')) return;
+
+  const delayHours = Math.max(1, parseInt(getSetting('followup_delay_hours') || '3', 10));
+  // Grace window: only send if the first message was sent at most 12h past the due time.
+  // Prevents a burst of stale follow-ups after downtime/deploy.
+  const windowHours = delayHours + 12;
+
+  const dueCarts = db.prepare(`
+    SELECT * FROM abandoned_carts
+    WHERE ${FOLLOWUP_BASE_WHERE}
+      AND datetime(message_sent_at) <= datetime('now', '-' || ? || ' hours')
+      AND datetime(message_sent_at) >= datetime('now', '-' || ? || ' hours')
+    ORDER BY message_sent_at ASC
+    LIMIT 10
+  `).all(delayHours, windowHours);
+
+  // Backfill (manual): older carts, sent very slowly to protect the number:
+  // 1 message per random interval, daily cap, business hours only, auto-pause on failures
+  const backfillSince = getSetting('followup_backfill_since');
+  if (backfillSince) {
+    const today = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+    if (getSetting('followup_backfill_day') !== today) {
+      setSetting('followup_backfill_day', today);
+      setSetting('followup_backfill_count', '0');
+    }
+    const sentToday = parseInt(getSetting('followup_backfill_count') || '0', 10);
+    const dailyLimit = parseInt(getSetting('followup_backfill_daily_limit') || '30', 10);
+    const brHour = parseInt(new Date().toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false }), 10);
+    const startHour = parseInt(getSetting('followup_backfill_start_hour') || '10', 10);
+    const endHour = parseInt(getSetting('followup_backfill_end_hour') || '20', 10);
+    const inHours = brHour >= startHour && brHour < endHour;
+    const nextAt = parseInt(getSetting('followup_backfill_next_at') || '0', 10);
+    const due = inHours && sentToday < dailyLimit && Date.now() >= nextAt;
+
+    const backlog = db.prepare(`
+      SELECT * FROM abandoned_carts
+      WHERE ${FOLLOWUP_BASE_WHERE}
+        AND datetime(message_sent_at) < datetime('now', '-' || ? || ' hours')
+        AND datetime(message_sent_at) >= datetime(?)
+      ORDER BY message_sent_at DESC
+      LIMIT 1
+    `).get(windowHours, backfillSince);
+
+    if (!backlog) {
+      console.log('[Follow-up] ✅ Envio retroativo da 2ª mensagem concluído.');
+      setSetting('followup_backfill_since', '');
+    } else if (due && dueCarts.length < 10) {
+      backlog._backfill = true;
+      dueCarts.push(backlog);
+    }
+  }
+
+  if (dueCarts.length > 0) {
+    console.log(`[Follow-up] ${dueCarts.length} carrinho(s) aguardando a 2ª mensagem`);
+  }
+
+  let sentInBatch = 0;
+  for (const cart of dueCarts) {
+    // Backfill pacing: next attempt in a random 4–9 min (skips included, so the queue keeps moving)
+    if (cart._backfill) {
+      const baseMin = Math.max(2, parseInt(getSetting('followup_backfill_interval_min') || '4', 10));
+      const waitMs = (baseMin + Math.random() * (baseMin + 1)) * 60 * 1000;
+      setSetting('followup_backfill_next_at', String(Date.now() + Math.floor(waitMs)));
+    }
+
+    // Customer already paid this order (possibly in another cart), or bought anything after this cart
+    const paidMatch = isCustomerOrderAlreadyPaid(cart) || findLaterPurchase(cart);
+    if (paidMatch) {
+      console.log(`[Follow-up] 🚫 Carrinho #${cart.id}: cliente já concluiu a compra no carrinho #${paidMatch.id}`);
+      markFollowUp(cart, 2, null);
+      continue;
+    }
+
+    const clean = getCleanPhone(cart.customer_phone);
+    const last8 = clean.slice(-8);
+
+    // A newer cart of the same customer already got a recovery message: that cart owns the follow-up now
+    const newerCart = db.prepare(`
+      SELECT id FROM abandoned_carts
+      WHERE id != ?
+        AND (customer_phone LIKE ? OR customer_phone LIKE ?)
+        AND message_sent = 1
+        AND datetime(message_sent_at) > datetime(?)
+      LIMIT 1
+    `).get(cart.id, `%${last8}%`, `%${clean}%`, cart.message_sent_at);
+
+    // Customer already received a follow-up in the last 24h
+    const recentFollowUp = db.prepare(`
+      SELECT id FROM abandoned_carts
+      WHERE id != ?
+        AND (customer_phone LIKE ? OR customer_phone LIKE ?)
+        AND followup_sent = 1
+        AND datetime(followup_sent_at) >= datetime('now', '-24 hours')
+      LIMIT 1
+    `).get(cart.id, `%${last8}%`, `%${clean}%`);
+
+    if (newerCart || recentFollowUp) {
+      console.log(`[Follow-up] ⏭️ Carrinho #${cart.id}: ignorado (${newerCart ? `carrinho mais recente #${newerCart.id}` : '2ª mensagem já enviada nas últimas 24h'})`);
+      markFollowUp(cart, 2, null);
+      continue;
+    }
+
+    // Backfill: never message a customer who got any other message from us in the last 24h
+    if (cart._backfill) {
+      const recentAny = db.prepare(`
+        SELECT id FROM message_log
+        WHERE cart_id != ?
+          AND (phone LIKE ? OR phone LIKE ?)
+          AND status = 'sent'
+          AND sent_at >= datetime('now', '-24 hours')
+        LIMIT 1
+      `).get(cart.id, `%${last8}%`, `%${clean}%`);
+      if (recentAny) {
+        console.log(`[Follow-up] ⏭️ Carrinho #${cart.id}: ignorado (cliente recebeu outra mensagem nas últimas 24h)`);
+        markFollowUp(cart, 2, null);
+        continue;
+      }
+    }
+
+    if (sentInBatch > 0) {
+      const jitterMs = Math.floor(Math.random() * ((maxDelaySec - minDelaySec) * 1000 + 1)) + (minDelaySec * 1000);
+      console.log(`[Anti-Ban] ⏳ Aguardando delay humano de ${(jitterMs / 1000).toFixed(1)}s antes da próxima 2ª mensagem...`);
+      await new Promise((resolve) => setTimeout(resolve, jitterMs));
+    }
+
+    // Re-check: the customer may have paid while we were waiting
+    const fresh = db.prepare('SELECT recovered, status FROM abandoned_carts WHERE id = ?').get(cart.id);
+    if (!fresh || fresh.recovered === 1 || fresh.status !== 'sent') {
+      markFollowUp(cart, 2, null);
+      continue;
+    }
+
+    try {
+      const message = buildMessage(cart, 'followup_message');
+      console.log(`[Follow-up] Enviando 2ª mensagem para #${cart.id} - ${cart.customer_name} (${cart.customer_phone})`);
+      const result = await sendWhatsAppMessage(cart.customer_phone, message);
+      sentInBatch++;
+
+      if (result.success) {
+        db.prepare(`
+          INSERT INTO message_log (cart_id, phone, message, status, waha_response)
+          VALUES (?, ?, ?, 'sent', ?)
+        `).run(cart.id, cart.customer_phone, message, JSON.stringify(result.data));
+        markFollowUp(cart, 1, null);
+        console.log(`[✓] 2ª mensagem enviada para ${cart.customer_phone}${cart._backfill ? ' (retroativa)' : ''}`);
+        if (cart._backfill) {
+          setSetting('followup_backfill_count', String(parseInt(getSetting('followup_backfill_count') || '0', 10) + 1));
+          setSetting('followup_backfill_failures', '0');
+        }
+      } else {
+        markFollowUp(cart, 2, message, 'failed', result.error);
+        console.log(`[✗] Falha na 2ª mensagem para ${cart.customer_phone}: ${result.error}`);
+        // Safety: repeated delivery errors may mean the number is restricted — stop the backfill
+        if (cart._backfill && !/não possui WhatsApp/i.test(String(result.error))) {
+          const failures = parseInt(getSetting('followup_backfill_failures') || '0', 10) + 1;
+          setSetting('followup_backfill_failures', String(failures));
+          if (failures >= 3) {
+            setSetting('followup_backfill_since', '');
+            setSetting('followup_backfill_paused_reason', `Pausado automaticamente após ${failures} falhas seguidas (${new Date().toISOString()})`);
+            console.warn('[Follow-up] ⛔ Envio retroativo PAUSADO após 3 falhas seguidas para proteger o número.');
+          }
+        }
+      }
+    } catch (err) {
+      console.error(`[Follow-up] Erro inesperado no carrinho #${cart.id}:`, err.message);
+      markFollowUp(cart, 2, null);
+    }
+  }
+}
+
 // Global lock to prevent overlapping runs from 1-minute cron
 let isProcessingCarts = false;
 
@@ -648,6 +886,9 @@ async function processPendingCarts() {
         await new Promise((resolve) => setTimeout(resolve, jitterMs));
       }
     }
+
+    // Second message (follow-up) for carts that received the first message X hours ago
+    await processFollowUps(minDelaySec, maxDelaySec);
   } finally {
     isProcessingCarts = false;
   }
@@ -709,4 +950,5 @@ module.exports = {
   resolveWorkingSession,
   hasRecentRecoveryMessage,
   isCustomerOrderAlreadyPaid,
+  countFollowUpBackfill,
 };

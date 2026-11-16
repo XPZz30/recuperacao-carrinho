@@ -18,13 +18,22 @@ const apiRoutes = require('./api');
 app.use('/api', apiRoutes);
 
 // Webhook routes
+const { handleWahaWebhook, startSpamWatcher } = require('./antispam');
 const webhookRoutes = require('./webhook');
+
+// WAHA Anti-Spam webhook (prioridade)
+app.post(['/webhook/waha', '/api/webhook/waha'], handleWahaWebhook);
+
+// Bestfy checkout/cart webhook
 app.use('/webhook/bestfy', webhookRoutes);
 app.use('/webhook', webhookRoutes);
 app.use('/api/webhook', webhookRoutes);
 
 // Fallback: if webhook is posted to root URL
 app.post('/', (req, res, next) => {
+  if (req.body && (req.body.event === 'message' || req.body.event === 'message.any')) {
+    return handleWahaWebhook(req, res);
+  }
   if (req.body && (req.body.type || req.body.event || req.body.data || req.body.status || req.body.id)) {
     return webhookRoutes(req, res, next);
   }
@@ -75,12 +84,22 @@ app.listen(PORT, HOST, () => {
   console.log('║   Bestfy + WAHA WhatsApp                                ║');
   console.log('╠══════════════════════════════════════════════════════════╣');
   console.log(`║   🌐 Dashboard: ${baseUrl}`);
-  console.log(`║   📡 Webhook:   ${baseUrl}/webhook/bestfy`);
+  console.log(`║   📡 Bestfy:    ${baseUrl}/webhook/bestfy`);
+  console.log(`║   🛡️ AntiSpam:  ${baseUrl}/webhook/waha`);
   console.log(`║   📊 API:       ${baseUrl}/api`);
+  const db = require('./database');
+  const isAntiSpamOn = db.getSetting('antispam_active') === 'true';
+
   console.log('╠══════════════════════════════════════════════════════════╣');
-  console.log('║   ⏰ Scheduler: Verificando a cada 1 minuto             ║');
+  console.log('║   ⏰ Scheduler: Carrinho Abandonado Ativo (1 min)        ║');
+  console.log(`║   🛡️ Anti-Spam: ${isAntiSpamOn ? 'Ativo em Tempo Real' : 'Desligado'}                              ║`);
   console.log('╚══════════════════════════════════════════════════════════╝');
   console.log('');
+
+  // Inicia monitor 24/7 de spam nos grupos apenas se ativado
+  if (isAntiSpamOn) {
+    startSpamWatcher();
+  }
 });
 
 module.exports = app;

@@ -37,6 +37,10 @@
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
         <span>Logs</span>
       </a>
+      <a href="#" class="nav-item" data-page="antispam" id="nav-antispam">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        <span>Anti-Spam Grupos</span>
+      </a>
       <a href="#" class="nav-item" data-page="settings" id="nav-settings">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
         <span>Configurações</span>
@@ -373,6 +377,50 @@
 
           <div class="settings-section">
             <h2 class="settings-title">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              2ª Mensagem (Follow-up)
+            </h2>
+            <div class="form-group">
+              <label for="settingFollowupActive">Status da 2ª Mensagem</label>
+              <div class="toggle-container">
+                <label class="toggle">
+                  <input type="checkbox" id="settingFollowupActive" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+                <span class="toggle-label" id="followupActiveLabel">Ativo</span>
+              </div>
+              <small class="form-help">Enviada somente se o cliente ainda não pagou. Respeita o horário de silêncio e no máximo 1 por cliente a cada 24h.</small>
+            </div>
+            <div class="form-group">
+              <label for="settingFollowupDelay">Enviar quantas horas após a 1ª mensagem</label>
+              <input type="number" id="settingFollowupDelay" min="1" max="48" value="3" class="form-input">
+            </div>
+            <div class="form-group">
+              <label for="settingFollowupMessage">Modelo da 2ª mensagem</label>
+              <textarea id="settingFollowupMessage" rows="8" class="form-input form-textarea" placeholder="Sua segunda mensagem aqui..."></textarea>
+              <small class="form-help">
+                Variáveis: <code>{nome}</code> <code>{produtos}</code> <code>{valor}</code> <code>{link}</code> • Spintax Anti-Ban: <code>{Olá|Oi|Opa}</code>
+              </small>
+            </div>
+            <div class="message-preview">
+              <h4>Pré-visualização:</h4>
+              <div class="whatsapp-bubble" id="followupMessagePreview">
+                <p>Carregando...</p>
+              </div>
+            </div>
+            <div class="form-group" style="margin-top: 1.25rem;">
+              <label>Envio retroativo (carrinhos que já receberam a 1ª mensagem)</label>
+              <small class="form-help" id="backfillStatus">Carregando...</small>
+              <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.5rem;">
+                <button type="button" class="btn btn-primary" id="backfillStart">Enviar para os últimos 7 dias</button>
+                <button type="button" class="btn" id="backfillStop" style="display:none;">Parar envio retroativo</button>
+              </div>
+              <small class="form-help">Proteção do número: 1 mensagem a cada 4–9 min, máx. 30/dia, só das 10h às 20h, pula quem pagou ou recebeu mensagem nas últimas 24h, e pausa sozinho após 3 falhas seguidas. Salve as configurações antes de iniciar.</small>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <h2 class="settings-title">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
               Mensagem de Pagamento Confirmado
             </h2>
@@ -407,6 +455,195 @@
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
               Salvar Configurações
             </button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Anti-Spam Page -->
+      <section class="page" id="page-antispam">
+        <!-- Status Card & Webhook Sync -->
+        <div class="card" style="margin-bottom: 24px; border-left: 4px solid var(--accent);">
+          <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;">
+            <div>
+              <h3 style="margin: 0 0 6px 0; display: flex; align-items: center; gap: 8px;">
+                <span>🛡️ Escudo Anti-Spam 24/7 Ativo</span>
+              </h3>
+              <p style="margin: 0; color: var(--text-secondary); font-size: 13px;">
+                Monitora mensagens nos grupos do WhatsApp, neutralizando pornografia, flood, links e invasores em tempo real. Administradores têm imunidade total.
+              </p>
+            </div>
+            <div style="display: flex; gap: 10px; align-items: center;">
+              <button class="btn btn-primary" id="btnSyncWahaWebhook" style="font-size: 13px; padding: 9px 16px;">
+                ⚡ Ativar Webhook no WAHA
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Groups Management -->
+        <div class="card" style="margin-bottom: 24px;">
+          <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
+            <div>
+              <h3 class="card-title">Grupos do WhatsApp Conectados</h3>
+              <p style="margin: 4px 0 0; color: var(--text-secondary); font-size: 13px;">
+                Status das permissões e controle manual de trancar/destrancar mensagens
+              </p>
+            </div>
+            <button class="btn btn-secondary" id="btnRefreshGroups" style="font-size: 12px; padding: 6px 12px;">
+              🔄 Atualizar Grupos
+            </button>
+          </div>
+          <div class="table-container" style="margin-top: 16px;">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Grupo</th>
+                  <th>Membros</th>
+                  <th>Bot é Admin?</th>
+                  <th>Status de Envio</th>
+                  <th>Ação Imediata</th>
+                </tr>
+              </thead>
+              <tbody id="antispamGroupsTable">
+                <tr><td colspan="5" style="text-align:center; padding: 20px;">Carregando grupos do WAHA...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Attack Logs -->
+        <div class="card" style="margin-bottom: 24px;">
+          <div class="card-header">
+            <h3 class="card-title">Registro de Ataques e Spams Neutralizados</h3>
+          </div>
+          <div class="table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Data/Hora</th>
+                  <th>Grupo</th>
+                  <th>Invasor</th>
+                  <th>Infração</th>
+                  <th>Ações Tomadas</th>
+                  <th>Prévia</th>
+                </tr>
+              </thead>
+              <tbody id="antispamLogsTable">
+                <tr><td colspan="6" style="text-align:center; padding: 20px;">Nenhum ataque registrado até o momento.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- AntiSpam Settings Form -->
+        <form class="settings-form" id="antispamSettingsForm">
+          <div class="card">
+            <div class="card-header">
+              <h3 class="card-title">Regras de Defesa Automática</h3>
+            </div>
+            <div class="form-grid">
+              <div class="form-group">
+                <label for="asSettingActive">Proteção Anti-Spam Geral</label>
+                <div class="toggle-container">
+                  <label class="toggle">
+                    <input type="checkbox" id="asSettingActive" checked>
+                    <span class="toggle-slider"></span>
+                  </label>
+                  <span class="toggle-label" id="asActiveLabel">Ativo</span>
+                </div>
+                <small class="form-help">Habilita ou desabilita a fiscalização em tempo real</small>
+              </div>
+
+              <div class="form-group">
+                <label for="asSettingBlockMedia">Bloquear Mídias de Membros Comuns (Anti-Pornô)</label>
+                <div class="toggle-container">
+                  <label class="toggle">
+                    <input type="checkbox" id="asSettingBlockMedia" checked>
+                    <span class="toggle-slider"></span>
+                  </label>
+                  <span class="toggle-label" id="asBlockMediaLabel">Ativo (Recomendado)</span>
+                </div>
+                <small class="form-help">Apaga instantaneamente fotos, vídeos ou figurinhas enviadas por não-administradores</small>
+              </div>
+
+              <div class="form-group">
+                <label for="asSettingLockGroup">Trancar Grupo Sob Ataque</label>
+                <div class="toggle-container">
+                  <label class="toggle">
+                    <input type="checkbox" id="asSettingLockGroup" checked>
+                    <span class="toggle-slider"></span>
+                  </label>
+                  <span class="toggle-label" id="asLockGroupLabel">Ativo</span>
+                </div>
+                <small class="form-help">Altera o grupo para "Apenas Admins Podem Enviar Mensagens" quando spam for detectado</small>
+              </div>
+
+              <div class="form-group">
+                <label for="asSettingKick">Expulsar / Banir Invasor</label>
+                <div class="toggle-container">
+                  <label class="toggle">
+                    <input type="checkbox" id="asSettingKick" checked>
+                    <span class="toggle-slider"></span>
+                  </label>
+                  <span class="toggle-label" id="asKickLabel">Ativo</span>
+                </div>
+                <small class="form-help">Remove o invasor do grupo imediatamente via WAHA</small>
+              </div>
+
+              <div class="form-group">
+                <label for="asSettingDelete">Apagar Mensagem para Todos</label>
+                <div class="toggle-container">
+                  <label class="toggle">
+                    <input type="checkbox" id="asSettingDelete" checked>
+                    <span class="toggle-slider"></span>
+                  </label>
+                  <span class="toggle-label" id="asDeleteLabel">Ativo</span>
+                </div>
+                <small class="form-help">Executa o delete/revoke da mensagem maliciosa</small>
+              </div>
+
+              <div class="form-group">
+                <label for="asSettingFlood">Anti-Flood & Repetição</label>
+                <div class="toggle-container">
+                  <label class="toggle">
+                    <input type="checkbox" id="asSettingFlood" checked>
+                    <span class="toggle-slider"></span>
+                  </label>
+                  <span class="toggle-label" id="asFloodLabel">Ativo</span>
+                </div>
+                <small class="form-help">Detecta envio massivo (>3 mensagens em 8s) ou repetição em loop</small>
+              </div>
+
+              <div class="form-group">
+                <label for="asSettingLinks">Anti-Links de Grupos/Canais</label>
+                <div class="toggle-container">
+                  <label class="toggle">
+                    <input type="checkbox" id="asSettingLinks" checked>
+                    <span class="toggle-slider"></span>
+                  </label>
+                  <span class="toggle-label" id="asLinksLabel">Ativo</span>
+                </div>
+                <small class="form-help">Bloqueia links do WhatsApp, Telegram, Discord e encurtadores</small>
+              </div>
+
+              <div class="form-group">
+                <label for="asSettingAlertPhone">Telefone para Alertas de Emergência (WhatsApp)</label>
+                <input type="text" id="asSettingAlertPhone" class="form-input" placeholder="5518996161744">
+                <small class="form-help">Número do administrador que receberá um WhatsApp privado avisando sobre cada ataque neutralizado</small>
+              </div>
+
+              <div class="form-group" style="grid-column: 1 / -1;">
+                <label for="asSettingTargetGroups">IDs dos Grupos Monitorados (Opcional)</label>
+                <input type="text" id="asSettingTargetGroups" class="form-input" placeholder="Deixe em branco para proteger TODOS os grupos onde o bot for admin">
+                <small class="form-help">Deixe vazio para proteger todos os grupos onde o bot é administrador, ou separe múltiplos IDs por vírgula (ex: 120363411570104365@g.us, 120363405736419547@g.us)</small>
+              </div>
+            </div>
+
+            <div class="settings-actions" style="margin-top: 20px;">
+              <button type="submit" class="btn btn-primary" id="saveAntispamSettings">
+                Salvar Regras Anti-Spam
+              </button>
+            </div>
           </div>
         </form>
       </section>

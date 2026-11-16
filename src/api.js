@@ -277,6 +277,76 @@ router.put('/settings', (req, res) => {
 });
 
 // ============================================================
+// Follow-up backfill (2nd message to carts that already got the 1st)
+// ============================================================
+
+function backfillStatus(days) {
+  const { countFollowUpBackfill } = require('./messenger');
+  const since = db.getSetting('followup_backfill_since') || '';
+  const preview = countFollowUpBackfill(days);
+  const dailyLimit = parseInt(db.getSetting('followup_backfill_daily_limit') || '30', 10);
+  return {
+    running: !!since,
+    since,
+    days,
+    pending_carts: preview.carts,
+    pending_customers: preview.customers,
+    sent_today: parseInt(db.getSetting('followup_backfill_count') || '0', 10),
+    daily_limit: dailyLimit,
+    hours: `${db.getSetting('followup_backfill_start_hour') || '10'}h–${db.getSetting('followup_backfill_end_hour') || '20'}h`,
+    paused_reason: db.getSetting('followup_backfill_paused_reason') || '',
+  };
+}
+
+/**
+ * GET /api/followup/backfill?days=7
+ * Preview how many carts/customers would receive the 2nd message + current status
+ */
+router.get('/followup/backfill', (req, res) => {
+  try {
+    const days = Math.min(30, Math.max(1, parseInt(req.query.days || '7', 10)));
+    res.json(backfillStatus(days));
+  } catch (error) {
+    console.error('[API] Erro no status do envio retroativo:', error.message);
+    res.status(500).json({ error: 'Erro interno' });
+  }
+});
+
+/**
+ * POST /api/followup/backfill { days }
+ * Start sending the 2nd message (slowly) to carts whose 1st message was sent in the last N days
+ */
+router.post('/followup/backfill', (req, res) => {
+  try {
+    const days = Math.min(30, Math.max(1, parseInt((req.body && req.body.days) || '7', 10)));
+    const since = db.prepare("SELECT datetime('now', '-' || ? || ' days') AS d").get(days).d;
+    db.setSetting('followup_backfill_since', since);
+    db.setSetting('followup_backfill_failures', '0');
+    db.setSetting('followup_backfill_paused_reason', '');
+    db.setSetting('followup_backfill_next_at', '0');
+    console.log(`[Follow-up] ▶️ Envio retroativo iniciado para carrinhos desde ${since} (UTC)`);
+    res.json(backfillStatus(days));
+  } catch (error) {
+    console.error('[API] Erro ao iniciar envio retroativo:', error.message);
+    res.status(500).json({ error: 'Erro interno' });
+  }
+});
+
+/**
+ * DELETE /api/followup/backfill
+ * Stop the backfill
+ */
+router.delete('/followup/backfill', (req, res) => {
+  try {
+    db.setSetting('followup_backfill_since', '');
+    console.log('[Follow-up] ⏹️ Envio retroativo interrompido manualmente.');
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Erro interno' });
+  }
+});
+
+// ============================================================
 // Message Logs
 // ============================================================
 
@@ -316,6 +386,134 @@ router.get('/webhook-events', (req, res) => {
   } catch (error) {
     console.error('[API] Erro ao buscar webhook events:', error.message);
     res.status(500).json({ error: 'Erro interno' });
+  }
+});
+
+// ============================================================
+// Anti-Spam & Moderação de Grupos
+// ============================================================
+
+/**
+ * GET /api/antispam/logs
+ * Returns antispam incident logs
+ */
+router.get('/antispam/logs', (req, res) => {
+  try {
+    const { page = 1, limit = 50 } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    const total = db.prepare('SELECT COUNT(*) as count FROM antispam_logs').get().count;
+    const logs = db.prepare(`
+      SELECT * FROM antispam_logs
+      ORDER BY created_at DESC
+      LIMIT ? OFFSET ?
+    `).all(parseInt(limit), offset);
+
+    res.json({ logs, total, page: parseInt(page), totalPages: Math.ceil(total / parseInt(limit)) });
+  } catch (error) {
+    console.error('[API] Erro ao buscar logs antispam:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/antispam/groups
+ * Returns groups from WAHA with bot admin status and settings
+ */
+router.get('/antispam/groups', async (req, res) => {
+  try {
+    const { getWahaClient } = require('./antispam');
+    const { client, session } = getWahaClient();
+
+    const groupsRes = await client.get(`/api/${session}/groups`);
+    const groupsData = groupsRes.data || {};
+
+    const groupList = [];
+    // Pode vir como objeto chave-valor ou array dependendo da versão do WAHA
+    const entries = Array.isArray(groupsData) 
+      ? groupsData.map(g => [g.id, g]) 
+      : Object.entries(groupsData);
+
+    for (const [id, g] of entries) {
+      try {
+        const detailRes = await client.get(`/api/${session}/groups/${encodeURIComponent(id)}`);
+        const detail = detailRes.data || {};
+        const participants = detail.participants || [];
+        
+        // Verifica se o bot é admin
+        const botP = participants.find(p => p.admin === 'admin' || p.admin === 'superadmin' || p.isAdmin || p.isSuperAdmin);
+        const isBotAdmin = !!botP;
+
+        groupList.push({
+          id,
+          subject: detail.subject || g.subject || id,
+          size: detail.size || participants.length || 0,
+          announce: detail.announce || false, // true = apenas admins enviam
+          joinApprovalMode: detail.joinApprovalMode || false,
+          isBotAdmin,
+          participantsCount: participants.length,
+        });
+      } catch (err) {
+        groupList.push({
+          id,
+          subject: g.subject || id,
+          size: g.size || 0,
+          announce: false,
+          isBotAdmin: false,
+        });
+      }
+    }
+
+    res.json({ groups: groupList });
+  } catch (error) {
+    console.error('[API] Erro ao buscar grupos no WAHA:', error.response?.data || error.message);
+    res.status(500).json({ error: error.response?.data || error.message });
+  }
+});
+
+/**
+ * POST /api/antispam/groups/:id/lock
+ * Restricts messaging to admins only
+ */
+router.post('/api/antispam/groups/:id/lock', async (req, res) => {
+  try {
+    const { setGroupLock } = require('./antispam');
+    await setGroupLock(req.params.id, true);
+    res.json({ success: true, message: 'Grupo trancado com sucesso (Apenas Admins)' });
+  } catch (error) {
+    res.status(500).json({ error: error.response?.data || error.message });
+  }
+});
+
+/**
+ * POST /api/antispam/groups/:id/unlock
+ * Allows all participants to send messages
+ */
+router.post('/api/antispam/groups/:id/unlock', async (req, res) => {
+  try {
+    const { setGroupLock } = require('./antispam');
+    await setGroupLock(req.params.id, false);
+    res.json({ success: true, message: 'Grupo destrancado com sucesso (Todos enviam)' });
+  } catch (error) {
+    res.status(500).json({ error: error.response?.data || error.message });
+  }
+});
+
+/**
+ * POST /api/antispam/configure-webhook
+ * Registers server webhook in WAHA session
+ */
+router.post('/antispam/configure-webhook', async (req, res) => {
+  try {
+    const { configureWahaWebhook } = require('./antispam');
+    const { webhookUrl } = req.body;
+    if (!webhookUrl) {
+      return res.status(400).json({ error: 'URL do webhook é obrigatória' });
+    }
+    const result = await configureWahaWebhook(webhookUrl);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.response?.data || error.message });
   }
 });
 
