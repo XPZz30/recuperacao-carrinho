@@ -108,8 +108,27 @@ function isSameOrder(cartA, cartBOrItems, amountB = null) {
   return false;
 }
 
+/**
+ * Maps the Bestfy checkout `step` to the abandonment stage used by the dashboard
+ * ("Contato", "Entrega", "Forma de pagamento", "Pagamento não concluído").
+ * Returns null when the step is unknown, so the generic recovery message is used.
+ */
+const CHECKOUT_STAGES = ['contact', 'delivery', 'payment_method', 'payment_not_completed'];
+
+function getCheckoutStage(step) {
+  const s = String(step || '').toUpperCase().trim();
+  if (!s) return null;
+  if (s.includes('NOT_COMPLETED') || s.includes('NOT_PAID') || s === 'WAITING_PAYMENT') return 'payment_not_completed';
+  if (s.includes('PAYMENT_METHOD') || s.includes('METHOD')) return 'payment_method';
+  if (s.includes('DELIVERY') || s.includes('ADDRESS') || s.includes('SHIPPING')) return 'delivery';
+  if (s.includes('CONTACT') || s.includes('IDENTIFICATION') || s.includes('IDENT')) return 'contact';
+  return null;
+}
+
 module.exports = {
   getCleanPhone,
   isSameCustomerPhone,
   isSameOrder,
+  getCheckoutStage,
+  CHECKOUT_STAGES,
 };

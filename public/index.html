@@ -373,6 +373,30 @@
                 <p>Carregando...</p>
               </div>
             </div>
+
+            <h4 style="margin-top: 1.5rem;">Mensagens por etapa de desistência</h4>
+            <small class="form-help">
+              Cada cliente recebe o modelo da etapa em que parou no checkout. Se a etapa do modelo estiver vazia, usa o modelo geral acima.
+            </small>
+            <div class="form-group">
+              <label for="settingStageContact">Etapa: Contato (começou o pedido, não avançou)</label>
+              <textarea id="settingStageContact" rows="6" class="form-input form-textarea"></textarea>
+            </div>
+            <div class="form-group">
+              <label for="settingStageDelivery">Etapa: Entrega</label>
+              <textarea id="settingStageDelivery" rows="6" class="form-input form-textarea"></textarea>
+            </div>
+            <div class="form-group">
+              <label for="settingStagePaymentMethod">Etapa: Forma de pagamento</label>
+              <textarea id="settingStagePaymentMethod" rows="6" class="form-input form-textarea"></textarea>
+            </div>
+            <div class="form-group">
+              <label for="settingStagePaymentNotCompleted">Etapa: Pagamento não concluído</label>
+              <textarea id="settingStagePaymentNotCompleted" rows="6" class="form-input form-textarea"></textarea>
+              <small class="form-help">
+                Variáveis: <code>{nome}</code> <code>{produtos}</code> <code>{valor}</code> <code>{link}</code> • Spintax Anti-Ban: <code>{Olá|Oi|Opa}</code>
+              </small>
+            </div>
           </div>
 
           <div class="settings-section">

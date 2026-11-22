@@ -286,6 +286,10 @@
       $('#settingWahaSession').value = settings.waha_session || 'default';
       $('#settingWahaKey').value = settings.waha_api_key || '';
       $('#settingMessage').value = settings.recovery_message || '';
+      $('#settingStageContact').value = settings.recovery_stage_contact_message || '';
+      $('#settingStageDelivery').value = settings.recovery_stage_delivery_message || '';
+      $('#settingStagePaymentMethod').value = settings.recovery_stage_payment_method_message || '';
+      $('#settingStagePaymentNotCompleted').value = settings.recovery_stage_payment_not_completed_message || '';
 
       $('#settingPaidActive').checked = settings.paid_message_active !== 'false';
       $('#paidActiveLabel').textContent = settings.paid_message_active !== 'false' ? 'Ativo' : 'Inativo';
@@ -325,6 +329,10 @@
         waha_session: $('#settingWahaSession').value,
         waha_api_key: $('#settingWahaKey').value,
         recovery_message: $('#settingMessage').value,
+        recovery_stage_contact_message: $('#settingStageContact').value,
+        recovery_stage_delivery_message: $('#settingStageDelivery').value,
+        recovery_stage_payment_method_message: $('#settingStagePaymentMethod').value,
+        recovery_stage_payment_not_completed_message: $('#settingStagePaymentNotCompleted').value,
         paid_message_active: $('#settingPaidActive').checked ? 'true' : 'false',
         paid_message: $('#settingPaidMessage').value,
         followup_active: $('#settingFollowupActive').checked ? 'true' : 'false',

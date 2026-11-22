@@ -1,6 +1,6 @@
 const axios = require('axios');
 const db = require('./database');
-const { getCleanPhone, isSameCustomerPhone, isSameOrder } = require('./utils');
+const { getCleanPhone, isSameCustomerPhone, isSameOrder, CHECKOUT_STAGES } = require('./utils');
 
 /**
  * Get a setting value from the database
@@ -372,7 +372,7 @@ function hasRecentRecoveryMessage(phone, cooldownHours = 4) {
   const recentLog = db.prepare(`
     SELECT ml.id, ml.sent_at 
     FROM message_log ml
-    WHERE (ml.phone LIKE ? OR ml.phone LIKE ?)
+    WHERE (digits(ml.phone) LIKE ? OR digits(ml.phone) LIKE ?)
       AND ml.status = 'sent'
       AND ml.sent_at >= datetime('now', '-' || ? || ' hours')
       AND ml.message NOT LIKE '%confirmado%'
@@ -387,7 +387,7 @@ function hasRecentRecoveryMessage(phone, cooldownHours = 4) {
   const recentCart = db.prepare(`
     SELECT id, message_sent_at
     FROM abandoned_carts
-    WHERE (customer_phone LIKE ? OR customer_phone LIKE ?)
+    WHERE (digits(customer_phone) LIKE ? OR digits(customer_phone) LIKE ?)
       AND message_sent = 1
       AND message_sent_at >= datetime('now', '-' || ? || ' hours')
     ORDER BY message_sent_at DESC
@@ -412,7 +412,7 @@ function isCustomerOrderAlreadyPaid(cart) {
   const paidCarts = db.prepare(`
     SELECT * FROM abandoned_carts
     WHERE (recovered = 1 OR payment_status = 'paid')
-      AND (customer_phone LIKE ? OR customer_phone LIKE ?)
+      AND (digits(customer_phone) LIKE ? OR digits(customer_phone) LIKE ?)
       AND created_at >= datetime('now', '-48 hours')
     ORDER BY created_at DESC
   `).all(`%${last8}%`, `%${clean}%`);
@@ -430,11 +430,24 @@ function isCustomerOrderAlreadyPaid(cart) {
 /**
  * Process a single abandoned cart - send recovery message with retry safety
  */
+/**
+ * First (recovery) message template for the cart's abandonment stage.
+ * Falls back to the generic `recovery_message` when the stage is unknown or its template is empty.
+ */
+function getRecoveryTemplateKey(cart) {
+  const stage = cart && cart.checkout_stage;
+  if (stage && CHECKOUT_STAGES.includes(stage)) {
+    const key = `recovery_stage_${stage}_message`;
+    if (getSetting(key)) return key;
+  }
+  return 'recovery_message';
+}
+
 async function processCart(cart) {
   console.log(`[Processando] Carrinho #${cart.id} - ${cart.customer_name} (${cart.customer_phone})`);
 
   try {
-    const message = buildMessage(cart);
+    const message = buildMessage(cart, getRecoveryTemplateKey(cart));
     const result = await sendWhatsAppMessage(cart.customer_phone, message);
 
     // Log the message
@@ -563,7 +576,7 @@ function findLaterPurchase(cart) {
     SELECT * FROM abandoned_carts
     WHERE id != ?
       AND (recovered = 1 OR payment_status = 'paid')
-      AND (customer_phone LIKE ? OR customer_phone LIKE ?)
+      AND (digits(customer_phone) LIKE ? OR digits(customer_phone) LIKE ?)
       AND datetime(created_at) >= datetime(?)
   `).all(cart.id, `%${clean.slice(-8)}%`, `%${clean}%`, cart.created_at);
   return candidates.find((p) => isSameCustomerPhone(p.customer_phone, cart.customer_phone)) || null;
@@ -670,7 +683,7 @@ async function processFollowUps(minDelaySec, maxDelaySec) {
     const newerCart = db.prepare(`
       SELECT id FROM abandoned_carts
       WHERE id != ?
-        AND (customer_phone LIKE ? OR customer_phone LIKE ?)
+        AND (digits(customer_phone) LIKE ? OR digits(customer_phone) LIKE ?)
         AND message_sent = 1
         AND datetime(message_sent_at) > datetime(?)
       LIMIT 1
@@ -680,7 +693,7 @@ async function processFollowUps(minDelaySec, maxDelaySec) {
     const recentFollowUp = db.prepare(`
       SELECT id FROM abandoned_carts
       WHERE id != ?
-        AND (customer_phone LIKE ? OR customer_phone LIKE ?)
+        AND (digits(customer_phone) LIKE ? OR digits(customer_phone) LIKE ?)
         AND followup_sent = 1
         AND datetime(followup_sent_at) >= datetime('now', '-24 hours')
       LIMIT 1
@@ -697,7 +710,7 @@ async function processFollowUps(minDelaySec, maxDelaySec) {
       const recentAny = db.prepare(`
         SELECT id FROM message_log
         WHERE cart_id != ?
-          AND (phone LIKE ? OR phone LIKE ?)
+          AND (digits(phone) LIKE ? OR digits(phone) LIKE ?)
           AND status = 'sent'
           AND sent_at >= datetime('now', '-24 hours')
         LIMIT 1

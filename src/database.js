@@ -16,6 +16,11 @@ const db = new Database(path.join(dataDir, 'cart-recovery.db'));
 // Enable WAL mode for better concurrent performance
 db.pragma('journal_mode = WAL');
 
+// digits(x): keeps only the digits of a value. Phones arrive formatted from Bestfy
+// (e.g. "+55 (65) 98418-2031"), so phone lookups must compare digits only —
+// a plain `customer_phone LIKE '%84182031%'` never matches because of the dash.
+db.function('digits', { deterministic: true }, (v) => (v == null ? '' : String(v).replace(/\D/g, '')));
+
 // Create tables
 db.exec(`
   CREATE TABLE IF NOT EXISTS abandoned_carts (
@@ -114,6 +119,13 @@ try {
   // Column already exists
 }
 
+// Checkout stage from Bestfy (contact | delivery | payment_method | payment_not_completed)
+try {
+  db.exec('ALTER TABLE abandoned_carts ADD COLUMN checkout_stage TEXT');
+} catch (e) {
+  // Column already exists
+}
+
 // Insert default settings if they don't exist
 const insertSetting = db.prepare(`
   INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)
@@ -124,6 +136,10 @@ const defaultSettings = {
   recovery_message: '{Olá|Oi|Opa} {nome}! 👋\n\n{Notamos|Vimos|Percebemos} que você não finalizou sua compra.\n\n🛒 *Itens no carrinho:*\n{produtos}\n\n💰 *Valor total:* R$ {valor}\n\n{Finalize agora mesmo clicando no link abaixo:|Conclua seu pedido pelo link abaixo:|Acesse aqui para finalizar:}\n👉 {link}\n\n{Se precisar de ajuda, é só responder esta mensagem! 😊|Qualquer dúvida, estamos à disposição por aqui! 😊|Pode responder esta mensagem se precisar de suporte! 😊}',
   paid_message_active: 'true',
   paid_message: '{Olá|Oi|Opa} {nome}! 🎉\n\nSeu pagamento foi confirmado com sucesso! ✅\n\n🛒 *Itens do seu pedido:*\n{produtos}\n\n💰 *Valor total:* R$ {valor}\n\n{Muito obrigado pela preferencia!|Agradecemos pela sua compra!|Obrigado pela preferência!} Aguarda a nossa equipe enviar o seu acesso pelo whatsapp.',
+  recovery_stage_contact_message: '{Oi|Olá|Opa} {nome}! 👋\n\n{Vimos que você começou seu pedido mas ainda não finalizou.|Seu pedido ficou pela metade, não é?}\n\n🛒 *Itens no carrinho:*\n{produtos}\n\n💰 *Valor total:* R$ {valor}\n\n{Para continuar de onde parou, acesse:|Retome seu pedido por aqui:}\n👉 {link}\n\n{Se precisar de ajuda, é só responder esta mensagem! 😊|Qualquer dúvida, estamos por aqui! 😊}',
+  recovery_stage_delivery_message: '{Oi|Olá|Opa} {nome}! 😊\n\n{Seus dados já foram informados, falta pouco para concluir!|Você está quase lá!}\n\n🛒 *Itens no carrinho:*\n{produtos}\n\n💰 *Valor total:* R$ {valor}\n\n{Confira a entrega e finalize pelo link:|Para concluir sua compra, acesse:}\n👉 {link}\n\n{Ficou alguma dúvida sobre a entrega? É só responder aqui! 😊|Estamos à disposição se precisar de ajuda! 😊}',
+  recovery_stage_payment_method_message: '{Oi|Olá|Opa} {nome}! 👋\n\n{Vimos que você ainda não escolheu a forma de pagamento.|Falta só escolher como pagar seu pedido!}\n\n🛒 *Itens no carrinho:*\n{produtos}\n\n💰 *Valor total:* R$ {valor}\n\n{Escolha PIX, cartão ou boleto e finalize pelo link:|Escolha a forma de pagamento aqui:}\n👉 {link}\n\n{Se tiver alguma dúvida sobre os pagamentos, é só responder! 😊|Estamos por aqui para ajudar! 😊}',
+  recovery_stage_payment_not_completed_message: '{Oi|Olá|Opa} {nome}! 👋\n\n{Seu pagamento ainda não foi concluído.|Notamos que o pagamento do seu pedido não foi finalizado.}\n\n🛒 *Itens no carrinho:*\n{produtos}\n\n💰 *Valor total:* R$ {valor}\n\n{Se ainda quiser finalizar, é só acessar:|Você pode concluir o pagamento por aqui:}\n👉 {link}\n\n{Teve algum problema ao pagar? Responda esta mensagem que te ajudamos! 😊|Qualquer dúvida, estamos por aqui! 😊}',
   followup_active: 'true',
   followup_delay_hours: '3',
   followup_message: '{Oi|Olá|Opa} {nome}! 😊\n\n{Vimos que você ainda não finalizou seu pedido.|Seu pedido ainda está te esperando!} Se ficou alguma dúvida, dá uma olhada no que nossos clientes falam da *SA GAMES*:\n\n⭐ https://www.instagram.com/p/DbtIwNiDqAh/\n\n{Quando quiser finalizar, é só acessar:|Para concluir sua compra:} {link}\n\n{Qualquer dúvida, é só responder aqui!|Estamos por aqui se precisar de ajuda!} 🎮',

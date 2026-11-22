@@ -1,7 +1,7 @@
 const express = require('express');
 const db = require('./database');
 const { getSetting } = require('./messenger');
-const { getCleanPhone, isSameCustomerPhone, isSameOrder } = require('./utils');
+const { getCleanPhone, isSameCustomerPhone, isSameOrder, getCheckoutStage } = require('./utils');
 
 const router = express.Router();
 
@@ -126,7 +126,7 @@ function hasCustomerPaidOrder(phone, items, amount, email = null) {
     SELECT * FROM abandoned_carts
     WHERE (recovered = 1 OR payment_status = 'paid')
       AND created_at >= datetime('now', '-48 hours')
-      AND (customer_phone LIKE ? OR customer_phone LIKE ?)
+      AND (digits(customer_phone) LIKE ? OR digits(customer_phone) LIKE ?)
     ORDER BY created_at DESC
   `).all(`%${last8}%`, `%${clean}%`);
 
@@ -153,7 +153,7 @@ function findPendingCartForCustomer(phone, items, amount, email = null) {
     SELECT * FROM abandoned_carts
     WHERE status = 'pending'
       AND created_at >= datetime('now', '-24 hours')
-      AND (customer_phone LIKE ? OR customer_phone LIKE ?)
+      AND (digits(customer_phone) LIKE ? OR digits(customer_phone) LIKE ?)
     ORDER BY created_at DESC
   `).all(`%${last8}%`, `%${clean}%`);
 
@@ -181,7 +181,7 @@ function cancelPendingCartsForPaidOrder(paidCart, tx = null) {
     SELECT * FROM abandoned_carts
     WHERE status = 'pending'
       AND id != ?
-      AND (customer_phone LIKE ? OR customer_phone LIKE ?)
+      AND (digits(customer_phone) LIKE ? OR digits(customer_phone) LIKE ?)
   `).all(paidCart.id, `%${last8}%`, `%${clean}%`);
 
   for (const pending of candidatePending) {
@@ -329,7 +329,12 @@ function handleCheckoutPostback(payload) {
 
   const cartId = String(checkout.abandonedCartId || checkout.id || checkout.checkoutId || `cart_${Date.now()}`);
   const existing = db.prepare('SELECT id, status FROM abandoned_carts WHERE checkout_id = ? OR transaction_id = ?').get(cartId, cartId);
+  const stage = getCheckoutStage(checkout.step);
   if (existing) {
+    // Customer advanced in the checkout (e.g. contact -> payment method) before the 1st message: keep the latest stage
+    if (existing.status === 'pending' && stage) {
+      db.prepare("UPDATE abandoned_carts SET checkout_stage = ?, updated_at = datetime('now') WHERE id = ?").run(stage, existing.id);
+    }
     console.log(`[Webhook] Carrinho ${cartId} já cadastrado (status: ${existing.status})`);
     return;
   }
@@ -349,6 +354,7 @@ function handleCheckoutPostback(payload) {
           secure_url = CASE WHEN ? != '' THEN ? ELSE secure_url END,
           amount = CASE WHEN ? > 0 THEN ? ELSE amount END,
           items_json = CASE WHEN ? = 1 THEN ? ELSE items_json END,
+          checkout_stage = COALESCE(?, checkout_stage),
           scheduled_at = ?,
           retry_count = 0,
           updated_at = datetime('now')
@@ -361,6 +367,7 @@ function handleCheckoutPostback(payload) {
       amount,
       updateItems ? 1 : 0,
       JSON.stringify(items),
+      stage,
       scheduledAt,
       existingPending.id
     );
@@ -372,8 +379,8 @@ function handleCheckoutPostback(payload) {
     INSERT INTO abandoned_carts (
       transaction_id, checkout_id, customer_name, customer_email,
       customer_phone, amount, items_json, secure_url,
-      status, payment_status, scheduled_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'abandoned', ?)
+      status, payment_status, scheduled_at, checkout_stage
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'abandoned', ?, ?)
   `);
 
   stmt.run(
@@ -385,7 +392,8 @@ function handleCheckoutPostback(payload) {
     amount,
     JSON.stringify(items),
     secureUrl,
-    scheduledAt
+    scheduledAt,
+    stage
   );
 
   console.log(`[Webhook] ✓ Carrinho abandonado agendado para recuperação em ${delayMinutes}min - Cliente: ${customer.name || 'Cliente'} (${phone})`);
@@ -406,6 +414,8 @@ function scheduleRecovery(tx, type, checkout = null) {
   const txId = String(tx.id || tx.transactionId || Date.now());
   const items = tx.items || tx.cartItems || (checkout ? (checkout.items || checkout.cartItems || checkout.products) : []) || [];
   const amount = extractAmount(tx, items) || (checkout ? extractAmount(checkout, items) : 0);
+  // Stage of the abandonment (drives the first message template); unpaid transaction = payment not completed
+  const stage = getCheckoutStage(checkout && checkout.step) || 'payment_not_completed';
 
   // 1. Condition 1: Check if customer already paid this order in another cart
   const alreadyPaid = hasCustomerPaidOrder(phone, items, amount, customer.email);
@@ -462,6 +472,7 @@ function scheduleRecovery(tx, type, checkout = null) {
           amount = CASE WHEN ? > 0 THEN ? ELSE amount END,
           items_json = CASE WHEN ? = 1 THEN ? ELSE items_json END,
           payment_status = ?,
+          checkout_stage = ?,
           scheduled_at = ?,
           retry_count = 0,
           updated_at = datetime('now')
@@ -476,6 +487,7 @@ function scheduleRecovery(tx, type, checkout = null) {
       updateItems ? 1 : 0,
       JSON.stringify(items),
       tx.status || 'waiting_payment',
+      stage,
       scheduledAt,
       existingPending.id
     );
@@ -487,8 +499,8 @@ function scheduleRecovery(tx, type, checkout = null) {
     INSERT INTO abandoned_carts (
       transaction_id, checkout_id, customer_name, customer_email,
       customer_phone, amount, items_json, secure_url,
-      status, payment_status, scheduled_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+      status, payment_status, scheduled_at, checkout_stage
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
   `);
 
   stmt.run(
@@ -501,7 +513,8 @@ function scheduleRecovery(tx, type, checkout = null) {
     JSON.stringify(items),
     secureUrl,
     tx.status || 'waiting_payment',
-    scheduledAt
+    scheduledAt,
+    stage
   );
 
   console.log(`[Webhook] ✓ Transação ${txId} agendada para recuperação em ${delayMinutes}min - Cliente: ${customer.name || 'Cliente'} (${phone})`);
