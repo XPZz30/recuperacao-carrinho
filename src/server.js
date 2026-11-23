@@ -10,6 +10,50 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Dashboard and API protection (HTTP Basic Auth).
+// Webhooks and the health check stay open so Bestfy/Necta/WAHA and Railway keep working.
+const crypto = require('crypto');
+
+function safeEqual(a, b) {
+  const bufA = Buffer.from(String(a));
+  const bufB = Buffer.from(String(b));
+  return bufA.length === bufB.length && crypto.timingSafeEqual(bufA, bufB);
+}
+
+function isOpenRoute(req) {
+  const p = req.path;
+  return (
+    p === '/health' ||
+    p.startsWith('/webhook') ||
+    p.startsWith('/api/webhook') ||
+    (req.method === 'POST' && p === '/')
+  );
+}
+
+app.use((req, res, next) => {
+  if (isOpenRoute(req)) return next();
+
+  const user = process.env.DASHBOARD_USER;
+  const pass = process.env.DASHBOARD_PASSWORD;
+  if (!user || !pass) {
+    console.warn('[Auth] DASHBOARD_USER/DASHBOARD_PASSWORD não definidos: painel e API sem proteção.');
+    return next();
+  }
+
+  const header = req.headers.authorization || '';
+  const [scheme, encoded] = header.split(' ');
+  if (scheme === 'Basic' && encoded) {
+    const decoded = Buffer.from(encoded, 'base64').toString('utf8');
+    const sep = decoded.indexOf(':');
+    if (sep !== -1 && safeEqual(decoded.slice(0, sep), user) && safeEqual(decoded.slice(sep + 1), pass)) {
+      return next();
+    }
+  }
+
+  res.set('WWW-Authenticate', 'Basic realm="Recuperacao de Carrinho", charset="UTF-8"');
+  return res.status(401).send('Autenticação necessária');
+});
+
 // Serve static files (dashboard)
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
