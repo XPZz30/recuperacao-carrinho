@@ -297,7 +297,7 @@
 
       $('#settingFollowupActive').checked = settings.followup_active !== 'false';
       $('#followupActiveLabel').textContent = settings.followup_active !== 'false' ? 'Ativo' : 'Inativo';
-      $('#settingFollowupDelay').value = settings.followup_delay_hours || '3';
+      $('#settingFollowupDelay').value = settings.followup_delay_hours || '4';
       $('#settingFollowupMessage').value = settings.followup_message || '';
 
       $('#settingAntiBanTyping').checked = settings.anti_ban_typing !== 'false';

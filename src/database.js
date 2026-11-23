@@ -119,6 +119,15 @@ try {
   // Column already exists
 }
 
+// Bestfy cartToken: the only id shared by transaction postbacks (no URL) and
+// checkout postbacks (with recoveryUrl) of the same purchase.
+try {
+  db.exec('ALTER TABLE abandoned_carts ADD COLUMN cart_token TEXT');
+} catch (e) {
+  // Column already exists
+}
+db.exec('CREATE INDEX IF NOT EXISTS idx_carts_cart_token ON abandoned_carts(cart_token)');
+
 // Checkout stage from Bestfy (contact | delivery | payment_method | payment_not_completed)
 try {
   db.exec('ALTER TABLE abandoned_carts ADD COLUMN checkout_stage TEXT');
@@ -141,7 +150,7 @@ const defaultSettings = {
   recovery_stage_payment_method_message: '{Oi|Olá|Opa} {nome}! 👋\n\n{Vimos que você ainda não escolheu a forma de pagamento.|Falta só escolher como pagar seu pedido!}\n\n🛒 *Itens no carrinho:*\n{produtos}\n\n💰 *Valor total:* R$ {valor}\n\n{Escolha PIX, cartão ou boleto e finalize pelo link:|Escolha a forma de pagamento aqui:}\n👉 {link}\n\n{Se tiver alguma dúvida sobre os pagamentos, é só responder! 😊|Estamos por aqui para ajudar! 😊}',
   recovery_stage_payment_not_completed_message: '{Oi|Olá|Opa} {nome}! 👋\n\n{Seu pagamento ainda não foi concluído.|Notamos que o pagamento do seu pedido não foi finalizado.}\n\n🛒 *Itens no carrinho:*\n{produtos}\n\n💰 *Valor total:* R$ {valor}\n\n{Se ainda quiser finalizar, é só acessar:|Você pode concluir o pagamento por aqui:}\n👉 {link}\n\n{Teve algum problema ao pagar? Responda esta mensagem que te ajudamos! 😊|Qualquer dúvida, estamos por aqui! 😊}',
   followup_active: 'true',
-  followup_delay_hours: '3',
+  followup_delay_hours: '4',
   followup_message: '{Oi|Olá|Opa} {nome}! 😊\n\n{Vimos que você ainda não finalizou seu pedido.|Seu pedido ainda está te esperando!} Se ficou alguma dúvida, dá uma olhada no que nossos clientes falam da *SA GAMES*:\n\n⭐ https://www.instagram.com/p/DbtIwNiDqAh/\n\n{Quando quiser finalizar, é só acessar:|Para concluir sua compra:} {link}\n\n{Qualquer dúvida, é só responder aqui!|Estamos por aqui se precisar de ajuda!} 🎮',
   followup_backfill_daily_limit: '30',
   followup_backfill_interval_min: '4',
@@ -156,6 +165,7 @@ const defaultSettings = {
   active: 'true',
   cart_cooldown_hours: '4',
   cart_max_age_hours: '12',
+  link_wait_minutes: '60',
   waha_api_url: process.env.WAHA_API_URL || 'https://waha-production-e923.up.railway.app',
   waha_session: process.env.WAHA_SESSION || 'default',
   waha_api_key: process.env.WAHA_API_KEY || 'recupera123',

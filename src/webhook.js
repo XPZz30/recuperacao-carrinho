@@ -168,6 +168,21 @@ function findPendingCartForCustomer(phone, items, amount, email = null) {
 }
 
 /**
+ * Find the cart created for a Bestfy transaction, by transaction id or cartToken
+ */
+function findCartByTxOrToken(txId, cartToken) {
+  if (txId) {
+    const byTx = db.prepare('SELECT * FROM abandoned_carts WHERE transaction_id = ?').get(String(txId));
+    if (byTx) return byTx;
+  }
+  if (cartToken) {
+    const byToken = db.prepare('SELECT * FROM abandoned_carts WHERE cart_token = ? ORDER BY created_at DESC').get(String(cartToken));
+    if (byToken) return byToken;
+  }
+  return null;
+}
+
+/**
  * Cancel any pending carts for a customer who completed/paid an order
  */
 function cancelPendingCartsForPaidOrder(paidCart, tx = null) {
@@ -328,20 +343,43 @@ function handleCheckoutPostback(payload) {
   }
 
   const cartId = String(checkout.abandonedCartId || checkout.id || checkout.checkoutId || `cart_${Date.now()}`);
-  const existing = db.prepare('SELECT id, status FROM abandoned_carts WHERE checkout_id = ? OR transaction_id = ?').get(cartId, cartId);
+  const existing = db.prepare('SELECT id, status, secure_url FROM abandoned_carts WHERE checkout_id = ? OR transaction_id = ?').get(cartId, cartId);
   const stage = getCheckoutStage(checkout.step);
+  const secureUrl = checkout.recoveryUrl || checkout.secureUrl || checkout.url || checkout.checkoutUrl || '';
+  const cartToken = checkout.cartToken ? String(checkout.cartToken) : null;
   if (existing) {
     // Customer advanced in the checkout (e.g. contact -> payment method) before the 1st message: keep the latest stage
     if (existing.status === 'pending' && stage) {
       db.prepare("UPDATE abandoned_carts SET checkout_stage = ?, updated_at = datetime('now') WHERE id = ?").run(stage, existing.id);
     }
+    if (secureUrl && !existing.secure_url) {
+      db.prepare("UPDATE abandoned_carts SET secure_url = ?, updated_at = datetime('now') WHERE id = ?").run(secureUrl, existing.id);
+      console.log(`[Webhook] Link de recuperação adicionado ao carrinho #${existing.id}`);
+    }
     console.log(`[Webhook] Carrinho ${cartId} já cadastrado (status: ${existing.status})`);
+    return;
+  }
+
+  // Bestfy sends the transaction postback (PENDING/EXPIRED, no URL) and, ~30 min later, a checkout
+  // postback (PAYMENT_NOT_COMPLETED, with recoveryUrl) for the same purchase. Attach the link
+  // to the cart created by the transaction instead of creating a second cart.
+  const txLinked = findCartByTxOrToken(checkout.financialTransactionId, cartToken);
+  if (txLinked && txLinked.status === 'pending') {
+    db.prepare(`
+      UPDATE abandoned_carts
+      SET secure_url = CASE WHEN ? != '' THEN ? ELSE secure_url END,
+          checkout_id = COALESCE(checkout_id, ?),
+          cart_token = COALESCE(cart_token, ?),
+          checkout_stage = COALESCE(?, checkout_stage),
+          updated_at = datetime('now')
+      WHERE id = ?
+    `).run(secureUrl, secureUrl, cartId, cartToken, stage, txLinked.id);
+    console.log(`[Webhook] Checkout ${cartId} vinculado ao carrinho #${txLinked.id} (transação ${txLinked.transaction_id}) - link de recuperação ${secureUrl ? 'adicionado' : 'ausente'}`);
     return;
   }
 
   const delayMinutes = parseInt(getSetting('recovery_delay_minutes') || process.env.RECOVERY_DELAY_MINUTES || '30');
   const scheduledAt = new Date(Date.now() + delayMinutes * 60 * 1000).toISOString();
-  const secureUrl = checkout.recoveryUrl || checkout.secureUrl || checkout.url || checkout.checkoutUrl || '';
 
   // 2. Deduplicate: if customer already has a pending cart with same order, update it and push delay forward
   const existingPending = findPendingCartForCustomer(phone, items, amount, customer.email);
@@ -356,6 +394,7 @@ function handleCheckoutPostback(payload) {
           items_json = CASE WHEN ? = 1 THEN ? ELSE items_json END,
           checkout_stage = COALESCE(?, checkout_stage),
           scheduled_at = ?,
+          cart_token = COALESCE(cart_token, ?),
           retry_count = 0,
           updated_at = datetime('now')
       WHERE id = ?
@@ -369,6 +408,7 @@ function handleCheckoutPostback(payload) {
       JSON.stringify(items),
       stage,
       scheduledAt,
+      cartToken,
       existingPending.id
     );
     console.log(`[Webhook] Carrinho pendente #${existingPending.id} atualizado com nova tentativa do cliente (${phone}) - reagendado para ${delayMinutes}min`);
@@ -379,8 +419,8 @@ function handleCheckoutPostback(payload) {
     INSERT INTO abandoned_carts (
       transaction_id, checkout_id, customer_name, customer_email,
       customer_phone, amount, items_json, secure_url,
-      status, payment_status, scheduled_at, checkout_stage
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'abandoned', ?, ?)
+      status, payment_status, scheduled_at, checkout_stage, cart_token
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'abandoned', ?, ?, ?)
   `);
 
   stmt.run(
@@ -393,7 +433,8 @@ function handleCheckoutPostback(payload) {
     JSON.stringify(items),
     secureUrl,
     scheduledAt,
-    stage
+    stage,
+    cartToken
   );
 
   console.log(`[Webhook] ✓ Carrinho abandonado agendado para recuperação em ${delayMinutes}min - Cliente: ${customer.name || 'Cliente'} (${phone})`);
@@ -412,6 +453,8 @@ function scheduleRecovery(tx, type, checkout = null) {
   }
 
   const txId = String(tx.id || tx.transactionId || Date.now());
+  const cartTokenRaw = tx.cartToken || (checkout && checkout.cartToken);
+  const cartToken = cartTokenRaw ? String(cartTokenRaw) : null;
   const items = tx.items || tx.cartItems || (checkout ? (checkout.items || checkout.cartItems || checkout.products) : []) || [];
   const amount = extractAmount(tx, items) || (checkout ? extractAmount(checkout, items) : 0);
   // Stage of the abandonment (drives the first message template); unpaid transaction = payment not completed
@@ -435,12 +478,14 @@ function scheduleRecovery(tx, type, checkout = null) {
     db.prepare(`
       UPDATE abandoned_carts 
       SET payment_status = ?, 
+          cart_token = COALESCE(cart_token, ?),
           amount = CASE WHEN ? > 0 THEN ? ELSE amount END,
           items_json = CASE WHEN ? = 1 THEN ? ELSE items_json END,
           updated_at = datetime('now') 
       WHERE id = ?
     `).run(
       tx.status || 'pending',
+      cartToken,
       updateAmount ? amount : 0,
       amount,
       updateAmount ? 1 : 0,
@@ -474,6 +519,7 @@ function scheduleRecovery(tx, type, checkout = null) {
           payment_status = ?,
           checkout_stage = ?,
           scheduled_at = ?,
+          cart_token = COALESCE(cart_token, ?),
           retry_count = 0,
           updated_at = datetime('now')
       WHERE id = ?
@@ -489,6 +535,7 @@ function scheduleRecovery(tx, type, checkout = null) {
       tx.status || 'waiting_payment',
       stage,
       scheduledAt,
+      cartToken,
       existingPending.id
     );
     console.log(`[Webhook] Carrinho pendente #${existingPending.id} atualizado com nova transação ${txId} para ${phone} - reagendado para ${delayMinutes}min`);
@@ -499,8 +546,8 @@ function scheduleRecovery(tx, type, checkout = null) {
     INSERT INTO abandoned_carts (
       transaction_id, checkout_id, customer_name, customer_email,
       customer_phone, amount, items_json, secure_url,
-      status, payment_status, scheduled_at, checkout_stage
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+      status, payment_status, scheduled_at, checkout_stage, cart_token
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
   `);
 
   stmt.run(
@@ -514,7 +561,8 @@ function scheduleRecovery(tx, type, checkout = null) {
     secureUrl,
     tx.status || 'waiting_payment',
     scheduledAt,
-    stage
+    stage,
+    cartToken
   );
 
   console.log(`[Webhook] ✓ Transação ${txId} agendada para recuperação em ${delayMinutes}min - Cliente: ${customer.name || 'Cliente'} (${phone})`);
@@ -565,7 +613,7 @@ async function markAsRecovered(txId, tx = null) {
 
   let cart = null;
   for (const id of candidates) {
-    cart = db.prepare('SELECT * FROM abandoned_carts WHERE transaction_id = ? OR checkout_id = ?').get(String(id), String(id));
+    cart = db.prepare('SELECT * FROM abandoned_carts WHERE transaction_id = ? OR checkout_id = ? OR cart_token = ?').get(String(id), String(id), String(id));
     if (cart) break;
   }
 

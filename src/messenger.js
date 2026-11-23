@@ -586,7 +586,7 @@ function findLaterPurchase(cart) {
  * Count carts that a backfill of the last `days` days would cover (before per-customer filters)
  */
 function countFollowUpBackfill(days) {
-  const delayHours = Math.max(1, parseInt(getSetting('followup_delay_hours') || '3', 10));
+  const delayHours = Math.max(1, parseInt(getSetting('followup_delay_hours') || '4', 10));
   const rows = db.prepare(`
     SELECT customer_phone FROM abandoned_carts
     WHERE ${FOLLOWUP_BASE_WHERE}
@@ -605,7 +605,7 @@ async function processFollowUps(minDelaySec, maxDelaySec) {
   if (getSetting('followup_active') === 'false') return;
   if (!getSetting('followup_message')) return;
 
-  const delayHours = Math.max(1, parseInt(getSetting('followup_delay_hours') || '3', 10));
+  const delayHours = Math.max(1, parseInt(getSetting('followup_delay_hours') || '4', 10));
   // Grace window: only send if the first message was sent at most 12h past the due time.
   // Prevents a burst of stale follow-ups after downtime/deploy.
   const windowHours = delayHours + 12;
@@ -773,6 +773,26 @@ async function processFollowUps(minDelaySec, maxDelaySec) {
   }
 }
 
+/**
+ * Whether the 1st message template used for this cart (stage or generic) has the {link} tag
+ */
+function recoveryMessageNeedsLink(cart) {
+  const key = getRecoveryTemplateKey(cart);
+  const template = getSetting(key) || (key === 'recovery_message' ? process.env.RECOVERY_MESSAGE : '') || '';
+  return template.includes('{link}');
+}
+
+/**
+ * Parse a SQLite datetime('now') string (UTC, no zone) or an ISO string to epoch ms
+ */
+function parseDbDate(value) {
+  if (!value) return Date.now();
+  const str = String(value);
+  const iso = str.includes('T') ? str : str.replace(' ', 'T') + 'Z';
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? Date.now() : t;
+}
+
 // Global lock to prevent overlapping runs from 1-minute cron
 let isProcessingCarts = false;
 
@@ -887,6 +907,35 @@ async function processPendingCarts() {
             `[Sistema] Envio cancelado: cliente já recebeu mensagem de recuperação nas últimas ${cooldownHours} horas.`
           );
         } catch (e) {}
+        continue;
+      }
+
+      // Condition 3: the 1st message must always carry the recovery link. Bestfy transaction
+      // postbacks (PENDING/EXPIRED) have no URL; the checkout postback with recoveryUrl usually
+      // arrives ~30 min later (when the PIX expires), so wait for it instead of sending without link.
+      if (!cart.secure_url && recoveryMessageNeedsLink(cart)) {
+        const waitMinutes = parseInt(getSetting('link_wait_minutes') || '60', 10);
+        const delayMinutes = parseInt(getSetting('recovery_delay_minutes') || process.env.RECOVERY_DELAY_MINUTES || '30', 10);
+        const ageMinutes = (Date.now() - parseDbDate(cart.created_at)) / 60000;
+
+        if (ageMinutes < delayMinutes + waitMinutes) {
+          db.prepare(`
+            UPDATE abandoned_carts
+            SET scheduled_at = datetime('now', '+5 minutes'),
+                updated_at = datetime('now')
+            WHERE id = ?
+          `).run(cart.id);
+          console.log(`[Scheduler] 🔗 Carrinho #${cart.id} sem link de recuperação ainda - aguardando webhook de checkout (reagendado +5min)`);
+        } else {
+          db.prepare(`
+            UPDATE abandoned_carts
+            SET status = 'cancelled',
+                cancel_reason = ?,
+                updated_at = datetime('now')
+            WHERE id = ?
+          `).run(`Sem link de recuperação após ${waitMinutes}min de espera`, cart.id);
+          console.log(`[Scheduler] 🚫 Carrinho #${cart.id} CANCELADO: nenhum link de recuperação recebido.`);
+        }
         continue;
       }
 
