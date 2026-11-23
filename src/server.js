@@ -62,11 +62,7 @@ const apiRoutes = require('./api');
 app.use('/api', apiRoutes);
 
 // Webhook routes
-const { handleWahaWebhook, startSpamWatcher } = require('./antispam');
 const webhookRoutes = require('./webhook');
-
-// WAHA Anti-Spam webhook (prioridade)
-app.post(['/webhook/waha', '/api/webhook/waha'], handleWahaWebhook);
 
 // Bestfy checkout/cart webhook
 app.use('/webhook/bestfy', webhookRoutes);
@@ -75,8 +71,9 @@ app.use('/api/webhook', webhookRoutes);
 
 // Fallback: if webhook is posted to root URL
 app.post('/', (req, res, next) => {
-  if (req.body && (req.body.event === 'message' || req.body.event === 'message.any')) {
-    return handleWahaWebhook(req, res);
+  // WhatsApp (WAHA) message events are not cart postbacks: acknowledge and ignore
+  if (req.body && typeof req.body.event === 'string' && req.body.event.startsWith('message')) {
+    return res.status(200).json({ ignored: true });
   }
   if (req.body && (req.body.type || req.body.event || req.body.data || req.body.status || req.body.id)) {
     return webhookRoutes(req, res, next);
@@ -129,21 +126,11 @@ app.listen(PORT, HOST, () => {
   console.log('╠══════════════════════════════════════════════════════════╣');
   console.log(`║   🌐 Dashboard: ${baseUrl}`);
   console.log(`║   📡 Bestfy:    ${baseUrl}/webhook/bestfy`);
-  console.log(`║   🛡️ AntiSpam:  ${baseUrl}/webhook/waha`);
   console.log(`║   📊 API:       ${baseUrl}/api`);
-  const db = require('./database');
-  const isAntiSpamOn = db.getSetting('antispam_active') === 'true';
-
   console.log('╠══════════════════════════════════════════════════════════╣');
   console.log('║   ⏰ Scheduler: Carrinho Abandonado Ativo (1 min)        ║');
-  console.log(`║   🛡️ Anti-Spam: ${isAntiSpamOn ? 'Ativo em Tempo Real' : 'Desligado'}                              ║`);
   console.log('╚══════════════════════════════════════════════════════════╝');
   console.log('');
-
-  // Inicia monitor 24/7 de spam nos grupos apenas se ativado
-  if (isAntiSpamOn) {
-    startSpamWatcher();
-  }
 });
 
 module.exports = app;

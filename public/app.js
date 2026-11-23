@@ -72,7 +72,6 @@
       dashboard: 'Dashboard',
       carts: 'Carrinhos Abandonados',
       logs: 'Logs de Mensagens',
-      antispam: 'Anti-Spam & Moderação de Grupos',
       settings: 'Configurações',
     };
     $('#pageTitle').textContent = titles[page] || 'Dashboard';
@@ -81,7 +80,6 @@
     if (page === 'dashboard') loadDashboard();
     if (page === 'carts') loadCarts();
     if (page === 'logs') loadLogs();
-    if (page === 'antispam') loadAntispam();
     if (page === 'settings') loadSettings();
   }
 
@@ -455,161 +453,6 @@
   }
 
   // ==========================================
-  // Anti-Spam & Moderação
-  // ==========================================
-  async function loadAntispam() {
-    await Promise.all([
-      loadAntispamSettings(),
-      loadAntispamGroups(),
-      loadAntispamLogs(),
-    ]);
-  }
-
-  async function loadAntispamSettings() {
-    try {
-      const settings = await api('/api/settings');
-
-      $('#asSettingActive').checked = settings.antispam_active !== 'false';
-      $('#asActiveLabel').textContent = settings.antispam_active !== 'false' ? 'Ativo' : 'Inativo';
-
-      $('#asSettingBlockMedia').checked = settings.antispam_block_all_media !== 'false';
-      $('#asBlockMediaLabel').textContent = settings.antispam_block_all_media !== 'false' ? 'Ativo (Recomendado)' : 'Inativo';
-
-      $('#asSettingLockGroup').checked = settings.antispam_lock_group_on_attack !== 'false';
-      $('#asLockGroupLabel').textContent = settings.antispam_lock_group_on_attack !== 'false' ? 'Ativo' : 'Inativo';
-
-      $('#asSettingKick').checked = settings.antispam_kick_attacker !== 'false';
-      $('#asKickLabel').textContent = settings.antispam_kick_attacker !== 'false' ? 'Ativo' : 'Inativo';
-
-      $('#asSettingDelete').checked = settings.antispam_delete_message !== 'false';
-      $('#asDeleteLabel').textContent = settings.antispam_delete_message !== 'false' ? 'Ativo' : 'Inativo';
-
-      $('#asSettingFlood').checked = settings.antispam_anti_flood !== 'false';
-      $('#asFloodLabel').textContent = settings.antispam_anti_flood !== 'false' ? 'Ativo' : 'Inativo';
-
-      $('#asSettingLinks').checked = settings.antispam_anti_links !== 'false';
-      $('#asLinksLabel').textContent = settings.antispam_anti_links !== 'false' ? 'Ativo' : 'Inativo';
-
-      $('#asSettingAlertPhone').value = settings.antispam_alert_phone || '5518996161744';
-      $('#asSettingTargetGroups').value = settings.antispam_target_groups || '';
-    } catch (err) {
-      console.error('Falha ao carregar configurações antispam:', err);
-    }
-  }
-
-  async function loadAntispamGroups() {
-    const tbody = $('#antispamGroupsTable');
-    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding: 20px;">Carregando grupos do WAHA...</td></tr>';
-
-    try {
-      const res = await api('/api/antispam/groups');
-      const groups = res.groups || [];
-
-      if (groups.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding: 20px;">Nenhum grupo encontrado na sessão WAHA.</td></tr>';
-        return;
-      }
-
-      tbody.innerHTML = groups.map((g) => {
-        const adminBadge = g.isBotAdmin 
-          ? '<span class="badge badge-recovered">Sim (Admin)</span>' 
-          : '<span class="badge badge-failed" title="Promova o bot a admin no WhatsApp!">Não é Admin ⚠️</span>';
-
-        const statusBadge = g.announce 
-          ? '<span class="badge badge-pending">🔒 Somente Admins</span>' 
-          : '<span class="badge badge-sent">🔓 Todos Enviam</span>';
-
-        const lockBtn = g.announce
-          ? `<button class="btn btn-secondary" onclick="toggleGroupLock('${g.id}', false)" style="font-size: 11px; padding: 5px 10px;">Destrancar Envio</button>`
-          : `<button class="btn btn-primary" onclick="toggleGroupLock('${g.id}', true)" style="font-size: 11px; padding: 5px 10px; background: var(--warning); border-color: var(--warning);">Trancar Envio</button>`;
-
-        return `
-          <tr>
-            <td>
-              <strong>${escHtml(g.subject)}</strong>
-              <br><small style="color: var(--text-tertiary); font-family: monospace;">${escHtml(g.id)}</small>
-            </td>
-            <td>${g.size || g.participantsCount || 0}</td>
-            <td>${adminBadge}</td>
-            <td>${statusBadge}</td>
-            <td>${g.isBotAdmin ? lockBtn : '<small style="color: var(--text-tertiary);">Requer Admin</small>'}</td>
-          </tr>
-        `;
-      }).join('');
-    } catch (err) {
-      tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding: 20px; color: var(--danger);">Erro ao carregar grupos: ${escHtml(err.message)}</td></tr>`;
-    }
-  }
-
-  async function loadAntispamLogs() {
-    const tbody = $('#antispamLogsTable');
-
-    try {
-      const res = await api('/api/antispam/logs?limit=25');
-      const logs = res.logs || [];
-
-      if (logs.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding: 20px; color: var(--text-secondary);">Nenhum ataque registrado até o momento. O grupo está seguro.</td></tr>';
-        return;
-      }
-
-      tbody.innerHTML = logs.map((log) => `
-        <tr>
-          <td><small>${formatDate(log.created_at)}</small></td>
-          <td><strong>${escHtml(log.group_name || log.group_id)}</strong></td>
-          <td><code>${escHtml(log.participant_phone || log.participant_id)}</code></td>
-          <td><span class="badge badge-failed">${escHtml(log.reason)}</span></td>
-          <td><small style="color: var(--success); font-weight: 500;">${escHtml(log.action_taken || 'Neutralizado')}</small></td>
-          <td><small style="color: var(--text-secondary); max-width: 200px; display: inline-block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escHtml(log.message_preview || '—')}</small></td>
-        </tr>
-      `).join('');
-    } catch (err) {
-      tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding: 20px; color: var(--danger);">Erro ao buscar logs de antispam: ${escHtml(err.message)}</td></tr>`;
-    }
-  }
-
-  window.toggleGroupLock = async function(groupId, lock) {
-    const action = lock ? 'lock' : 'unlock';
-    const actionLabel = lock ? 'trancar' : 'destrancar';
-    if (!confirm(`Deseja realmente ${actionLabel} o envio de mensagens deste grupo?`)) return;
-
-    try {
-      await api(`/api/antispam/groups/${encodeURIComponent(groupId)}/${action}`, { method: 'POST' });
-      showToast(`Grupo ${lock ? 'trancado' : 'destrancado'} com sucesso!`, 'success');
-      loadAntispamGroups();
-    } catch (err) {
-      showToast(`Erro ao ${actionLabel} grupo: ` + err.message, 'error');
-    }
-  };
-
-  async function saveAntispamSettings(e) {
-    e.preventDefault();
-
-    try {
-      const payload = {
-        antispam_active: $('#asSettingActive').checked ? 'true' : 'false',
-        antispam_block_all_media: $('#asSettingBlockMedia').checked ? 'true' : 'false',
-        antispam_lock_group_on_attack: $('#asSettingLockGroup').checked ? 'true' : 'false',
-        antispam_kick_attacker: $('#asSettingKick').checked ? 'true' : 'false',
-        antispam_delete_message: $('#asSettingDelete').checked ? 'true' : 'false',
-        antispam_anti_flood: $('#asSettingFlood').checked ? 'true' : 'false',
-        antispam_anti_links: $('#asSettingLinks').checked ? 'true' : 'false',
-        antispam_alert_phone: $('#asSettingAlertPhone').value.trim(),
-        antispam_target_groups: $('#asSettingTargetGroups').value.trim(),
-      };
-
-      await api('/api/settings', {
-        method: 'PUT',
-        body: JSON.stringify(payload),
-      });
-
-      showToast('Regras de Anti-Spam salvas com sucesso!', 'success');
-    } catch (err) {
-      showToast('Erro ao salvar regras de Anti-Spam', 'error');
-    }
-  }
-
-  // ==========================================
   // Cart Actions
   // ==========================================
   window.resendCart = async function (id) {
@@ -820,68 +663,6 @@
 
     // Settings form
     $('#settingsForm').addEventListener('submit', saveSettings);
-
-    // Anti-Spam Form & Actions
-    if ($('#antispamSettingsForm')) {
-      $('#antispamSettingsForm').addEventListener('submit', saveAntispamSettings);
-    }
-
-    if ($('#btnRefreshGroups')) {
-      $('#btnRefreshGroups').addEventListener('click', loadAntispamGroups);
-    }
-
-    if ($('#btnSyncWahaWebhook')) {
-      $('#btnSyncWahaWebhook').addEventListener('click', async () => {
-        const webhookUrl = `${window.location.origin}/webhook/waha`;
-        try {
-          showToast('Registrando webhook no WAHA...', 'info');
-          const res = await api('/api/antispam/configure-webhook', {
-            method: 'POST',
-            body: JSON.stringify({ webhookUrl }),
-          });
-          showToast(res.message || 'Webhook ativado no WAHA!', 'success');
-        } catch (err) {
-          showToast('Erro ao registrar webhook no WAHA: ' + err.message, 'error');
-        }
-      });
-    }
-
-    // AntiSpam toggles
-    if ($('#asSettingActive')) {
-      $('#asSettingActive').addEventListener('change', (e) => {
-        $('#asActiveLabel').textContent = e.target.checked ? 'Ativo' : 'Inativo';
-      });
-    }
-    if ($('#asSettingBlockMedia')) {
-      $('#asSettingBlockMedia').addEventListener('change', (e) => {
-        $('#asBlockMediaLabel').textContent = e.target.checked ? 'Ativo (Recomendado)' : 'Inativo';
-      });
-    }
-    if ($('#asSettingLockGroup')) {
-      $('#asSettingLockGroup').addEventListener('change', (e) => {
-        $('#asLockGroupLabel').textContent = e.target.checked ? 'Ativo' : 'Inativo';
-      });
-    }
-    if ($('#asSettingKick')) {
-      $('#asSettingKick').addEventListener('change', (e) => {
-        $('#asKickLabel').textContent = e.target.checked ? 'Ativo' : 'Inativo';
-      });
-    }
-    if ($('#asSettingDelete')) {
-      $('#asSettingDelete').addEventListener('change', (e) => {
-        $('#asDeleteLabel').textContent = e.target.checked ? 'Ativo' : 'Inativo';
-      });
-    }
-    if ($('#asSettingFlood')) {
-      $('#asSettingFlood').addEventListener('change', (e) => {
-        $('#asFloodLabel').textContent = e.target.checked ? 'Ativo' : 'Inativo';
-      });
-    }
-    if ($('#asSettingLinks')) {
-      $('#asSettingLinks').addEventListener('change', (e) => {
-        $('#asLinksLabel').textContent = e.target.checked ? 'Ativo' : 'Inativo';
-      });
-    }
 
     // Toggle label
     $('#settingActive').addEventListener('change', (e) => {

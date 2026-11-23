@@ -56,19 +56,6 @@ db.exec(`
     FOREIGN KEY (cart_id) REFERENCES abandoned_carts(id)
   );
 
-  CREATE TABLE IF NOT EXISTS antispam_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    group_id TEXT NOT NULL,
-    group_name TEXT,
-    participant_id TEXT NOT NULL,
-    participant_phone TEXT,
-    message_id TEXT,
-    reason TEXT NOT NULL,
-    message_preview TEXT,
-    action_taken TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
-  );
-
   CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -89,8 +76,6 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_carts_phone ON abandoned_carts(customer_phone);
   CREATE INDEX IF NOT EXISTS idx_msglog_phone ON message_log(phone);
   CREATE INDEX IF NOT EXISTS idx_msglog_sent_at ON message_log(sent_at);
-  CREATE INDEX IF NOT EXISTS idx_antispam_group ON antispam_logs(group_id);
-  CREATE INDEX IF NOT EXISTS idx_antispam_created_at ON antispam_logs(created_at);
 `);
 
 // Safe migrations for newly added columns
@@ -169,20 +154,17 @@ const defaultSettings = {
   waha_api_url: process.env.WAHA_API_URL || 'https://waha-production-e923.up.railway.app',
   waha_session: process.env.WAHA_SESSION || 'default',
   waha_api_key: process.env.WAHA_API_KEY || 'recupera123',
-  antispam_active: 'true',
-  antispam_target_groups: '',
-  antispam_alert_phone: '5518996161744',
-  antispam_block_all_media: 'true',
-  antispam_lock_group_on_attack: 'true',
-  antispam_kick_attacker: 'true',
-  antispam_delete_message: 'true',
-  antispam_anti_flood: 'true',
-  antispam_anti_links: 'true',
 };
 
 for (const [key, value] of Object.entries(defaultSettings)) {
   insertSetting.run(key, value);
 }
+
+// Group anti-spam was removed: drop its table and settings from existing databases
+db.exec(`
+  DROP TABLE IF EXISTS antispam_logs;
+  DELETE FROM settings WHERE key LIKE 'antispam\\_%' ESCAPE '\\';
+`);
 
 db.getSetting = function(key) {
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
