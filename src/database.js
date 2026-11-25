@@ -120,6 +120,16 @@ try {
   // Column already exists
 }
 
+// Store identity (one deployment per store). Defaults keep the original SA GAMES install unchanged.
+const STORE_NAME = process.env.STORE_NAME || 'SA GAMES';
+const STORE_PROOF_URL = process.env.STORE_PROOF_URL !== undefined
+  ? process.env.STORE_PROOF_URL
+  : 'https://www.instagram.com/p/DbtIwNiDqAh/';
+const proofLine = STORE_PROOF_URL
+  ? ` Se ficou alguma dúvida, dá uma olhada no que nossos clientes falam da *${STORE_NAME}*:\n\n⭐ ${STORE_PROOF_URL}`
+  : ` A equipe da *${STORE_NAME}* está por aqui se ficou alguma dúvida.`;
+db.STORE_NAME = STORE_NAME;
+
 // Insert default settings if they don't exist
 const insertSetting = db.prepare(`
   INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)
@@ -136,7 +146,7 @@ const defaultSettings = {
   recovery_stage_payment_not_completed_message: '{Oi|Olá|Opa} {nome}! 👋\n\n{Seu pagamento ainda não foi concluído.|Notamos que o pagamento do seu pedido não foi finalizado.}\n\n🛒 *Itens no carrinho:*\n{produtos}\n\n💰 *Valor total:* R$ {valor}\n\n{Se ainda quiser finalizar, é só acessar:|Você pode concluir o pagamento por aqui:}\n👉 {link}\n\n{Teve algum problema ao pagar? Responda esta mensagem que te ajudamos! 😊|Qualquer dúvida, estamos por aqui! 😊}',
   followup_active: 'true',
   followup_delay_hours: '4',
-  followup_message: '{Oi|Olá|Opa} {nome}! 😊\n\n{Vimos que você ainda não finalizou seu pedido.|Seu pedido ainda está te esperando!} Se ficou alguma dúvida, dá uma olhada no que nossos clientes falam da *SA GAMES*:\n\n⭐ https://www.instagram.com/p/DbtIwNiDqAh/\n\n{Quando quiser finalizar, é só acessar:|Para concluir sua compra:} {link}\n\n{Qualquer dúvida, é só responder aqui!|Estamos por aqui se precisar de ajuda!} 🎮',
+  followup_message: '{Oi|Olá|Opa} {nome}! 😊\n\n{Vimos que você ainda não finalizou seu pedido.|Seu pedido ainda está te esperando!}' + proofLine + '\n\n{Quando quiser finalizar, é só acessar:|Para concluir sua compra:} {link}\n\n{Qualquer dúvida, é só responder aqui!|Estamos por aqui se precisar de ajuda!} 🎮',
   followup_backfill_daily_limit: '30',
   followup_backfill_interval_min: '4',
   followup_backfill_start_hour: '10',

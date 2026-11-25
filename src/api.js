@@ -242,6 +242,7 @@ router.get('/settings', (req, res) => {
     for (const row of rows) {
       settings[row.key] = row.value;
     }
+    settings.store_name = db.STORE_NAME;
     res.json(settings);
   } catch (error) {
     console.error('[API] Erro ao buscar settings:', error.message);

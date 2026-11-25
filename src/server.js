@@ -122,7 +122,7 @@ app.listen(PORT, HOST, () => {
   console.log('');
   console.log('╔══════════════════════════════════════════════════════════╗');
   console.log('║   🛒 RECUPERAÇÃO DE CARRINHO ABANDONADO                 ║');
-  console.log('║   Bestfy + WAHA WhatsApp                                ║');
+  console.log(`║   Loja: ${process.env.STORE_NAME || 'SA GAMES'} (Bestfy + WAHA)`);
   console.log('╠══════════════════════════════════════════════════════════╣');
   console.log(`║   🌐 Dashboard: ${baseUrl}`);
   console.log(`║   📡 Bestfy:    ${baseUrl}/webhook/bestfy`);

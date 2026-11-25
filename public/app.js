@@ -383,7 +383,7 @@
       .replace(/\{nome\}/g, 'Samuel')
       .replace(/\{produtos\}/g, '  • Overcooked (Mídia Digital) - PS4 (1x) - R$ 9,43')
       .replace(/\{valor\}/g, '9,43')
-      .replace(/\{link\}/g, 'https://pagamento.sagamespro.com.br');
+      .replace(/\{link\}/g, 'https://checkout.sualoja.com.br/exemplo');
 
     $('#paidMessagePreview').textContent = preview;
   }
@@ -447,7 +447,7 @@
       .replace(/\{nome\}/g, 'Samuel')
       .replace(/\{produtos\}/g, '  • Overcooked (Mídia Digital) - PS4 (1x) - R$ 9,43')
       .replace(/\{valor\}/g, '9,43')
-      .replace(/\{link\}/g, 'https://pagamento.sagamespro.com.br');
+      .replace(/\{link\}/g, 'https://checkout.sualoja.com.br/exemplo');
 
     $('#followupMessagePreview').textContent = preview;
   }
@@ -617,6 +617,13 @@
     // Set webhook URL
     const baseUrl = window.location.origin;
     $('#webhookUrl').textContent = `${baseUrl}/webhook/bestfy`;
+
+    // Show which store this dashboard belongs to (one deployment per store)
+    api('/api/settings').then((s) => {
+      if (!s || !s.store_name) return;
+      $('.logo-text').textContent = s.store_name;
+      document.title = `${s.store_name} — Recuperação de Carrinho`;
+    }).catch(() => {});
 
     // Navigation
     $$('.nav-item, [data-page]').forEach((item) => {
