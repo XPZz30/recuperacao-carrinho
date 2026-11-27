@@ -302,8 +302,19 @@
       $('#antiBanTypingLabel').textContent = settings.anti_ban_typing !== 'false' ? 'Ativo (Simula "Digitando..." por 3-5s antes de enviar)' : 'Inativo';
       $('#settingQuietHours').checked = settings.quiet_hours_active !== 'false';
       $('#quietHoursLabel').textContent = settings.quiet_hours_active !== 'false' ? 'Ativo (Pausa carrinhos das 23h às 08h para evitar denúncias)' : 'Inativo';
-      $('#settingDelayMin').value = settings.anti_ban_delay_min || '8';
-      $('#settingDelayMax').value = settings.anti_ban_delay_max || '18';
+      $('#settingGapMin').value = settings.send_gap_min_minutes || '2';
+      $('#settingGapMax').value = settings.send_gap_max_minutes || '5';
+      $('#settingLimitHour').value = settings.send_limit_per_hour || '6';
+      $('#settingLimitDay').value = settings.send_limit_per_day || '40';
+      $('#settingFollowupOnlyReplied').checked = settings.followup_only_if_replied !== 'false';
+      $('#followupOnlyRepliedLabel').textContent = settings.followup_only_if_replied !== 'false' ? 'Ativo (recomendado: 2ª mensagem sem resposta é o que mais gera denúncia de spam)' : 'Inativo';
+      const pauseBanner = $('#autoPauseBanner');
+      if (settings.auto_pause_reason) {
+        pauseBanner.textContent = `⛔ Pausado automaticamente para proteger o número: ${settings.auto_pause_reason}. Verifique o WhatsApp e ative de novo para retomar.`;
+        pauseBanner.style.display = 'block';
+      } else {
+        pauseBanner.style.display = 'none';
+      }
       if ($('#settingCooldownHours')) $('#settingCooldownHours').value = settings.cart_cooldown_hours || '4';
       if ($('#settingMaxAgeHours')) $('#settingMaxAgeHours').value = settings.cart_max_age_hours || '12';
 
@@ -338,8 +349,11 @@
         followup_message: $('#settingFollowupMessage').value,
         anti_ban_typing: $('#settingAntiBanTyping').checked ? 'true' : 'false',
         quiet_hours_active: $('#settingQuietHours').checked ? 'true' : 'false',
-        anti_ban_delay_min: $('#settingDelayMin').value,
-        anti_ban_delay_max: $('#settingDelayMax').value,
+        send_gap_min_minutes: $('#settingGapMin').value,
+        send_gap_max_minutes: $('#settingGapMax').value,
+        send_limit_per_hour: $('#settingLimitHour').value,
+        send_limit_per_day: $('#settingLimitDay').value,
+        followup_only_if_replied: $('#settingFollowupOnlyReplied').checked ? 'true' : 'false',
         cart_cooldown_hours: $('#settingCooldownHours') ? $('#settingCooldownHours').value : '4',
         cart_max_age_hours: $('#settingMaxAgeHours') ? $('#settingMaxAgeHours').value : '12',
       };
@@ -350,6 +364,7 @@
       });
 
       showToast('Configurações salvas com sucesso!', 'success');
+      loadSettings();
     } catch (err) {
       showToast('Erro ao salvar configurações', 'error');
     }
@@ -682,6 +697,9 @@
       $('#followupActiveLabel').textContent = e.target.checked ? 'Ativo' : 'Inativo';
     });
     $('#settingFollowupMessage').addEventListener('input', updateFollowupMessagePreview);
+    $('#settingFollowupOnlyReplied').addEventListener('change', (e) => {
+      $('#followupOnlyRepliedLabel').textContent = e.target.checked ? 'Ativo (recomendado: 2ª mensagem sem resposta é o que mais gera denúncia de spam)' : 'Inativo';
+    });
     $('#backfillStart').addEventListener('click', startBackfill);
     $('#backfillStop').addEventListener('click', stopBackfill);
 

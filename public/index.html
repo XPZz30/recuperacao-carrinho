@@ -274,6 +274,7 @@
                 </label>
                 <span class="toggle-label" id="activeLabel">Ativo</span>
               </div>
+              <div id="autoPauseBanner" class="form-help" style="display: none; margin-top: 8px; padding: 10px 12px; border-radius: 8px; background: rgba(239, 68, 68, 0.12); color: #ef4444;"></div>
             </div>
             <div class="form-group">
               <label for="settingDelay">Tempo de espera antes do envio (minutos)</label>
@@ -328,15 +329,26 @@
             </div>
             <div class="form-group" style="display: flex; gap: 16px;">
               <div style="flex: 1;">
-                <label for="settingDelayMin">Intervalo Mínimo (segundos)</label>
-                <input type="number" id="settingDelayMin" min="2" max="60" value="8" class="form-input">
+                <label for="settingGapMin">Intervalo Mínimo entre envios (minutos)</label>
+                <input type="number" id="settingGapMin" min="0.5" max="120" step="0.5" value="2" class="form-input">
               </div>
               <div style="flex: 1;">
-                <label for="settingDelayMax">Intervalo Máximo (segundos)</label>
-                <input type="number" id="settingDelayMax" min="5" max="120" value="18" class="form-input">
+                <label for="settingGapMax">Intervalo Máximo entre envios (minutos)</label>
+                <input type="number" id="settingGapMax" min="1" max="240" step="0.5" value="5" class="form-input">
               </div>
             </div>
-            <small class="form-help">Varia aleatoriamente o tempo entre envios consecutivos, quebrando qualquer padrão robótico.</small>
+            <small class="form-help">Envia no máximo 1 mensagem por vez e espera um tempo aleatório nessa faixa antes da próxima (vale para todas as mensagens).</small>
+            <div class="form-group" style="display: flex; gap: 16px; margin-top: 16px;">
+              <div style="flex: 1;">
+                <label for="settingLimitHour">Limite de mensagens por hora</label>
+                <input type="number" id="settingLimitHour" min="1" max="60" value="6" class="form-input">
+              </div>
+              <div style="flex: 1;">
+                <label for="settingLimitDay">Limite de mensagens por dia</label>
+                <input type="number" id="settingLimitDay" min="1" max="500" value="40" class="form-input">
+              </div>
+            </div>
+            <small class="form-help">Conta tudo que foi enviado (1ª, 2ª mensagem e confirmação de pagamento). Ao atingir o limite, os carrinhos esperam. Depois de uma restrição, comece baixo e aumente aos poucos.</small>
             <div class="form-group" style="display: flex; gap: 16px; margin-top: 16px;">
               <div style="flex: 1;">
                 <label for="settingCooldownHours">Intervalo por Cliente (horas)</label>
@@ -410,6 +422,16 @@
                 <span class="toggle-label" id="followupActiveLabel">Ativo</span>
               </div>
               <small class="form-help">Enviada somente se o cliente ainda não pagou. Respeita o horário de silêncio e no máximo 1 por cliente a cada 24h.</small>
+            </div>
+            <div class="form-group">
+              <label for="settingFollowupOnlyReplied">Só para quem respondeu a 1ª mensagem</label>
+              <div class="toggle-container">
+                <label class="toggle">
+                  <input type="checkbox" id="settingFollowupOnlyReplied" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+                <span class="toggle-label" id="followupOnlyRepliedLabel">Ativo (recomendado: 2ª mensagem sem resposta é o que mais gera denúncia de spam)</span>
+              </div>
             </div>
             <div class="form-group">
               <label for="settingFollowupDelay">Enviar quantas horas após a 1ª mensagem</label>

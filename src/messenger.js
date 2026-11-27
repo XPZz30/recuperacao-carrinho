@@ -21,6 +21,105 @@ function setSetting(key, value) {
   `).run(key, String(value));
 }
 
+// ============================================================
+// Send pacing (anti-ban): every message starts or continues a chat with a
+// customer who never saved our number, so volume and rhythm are what get the
+// number restricted. All sends share one budget: at most 1 message per cron
+// tick, a random gap between messages, and hourly/daily caps.
+// ============================================================
+
+function intSetting(key, fallback) {
+  const n = parseInt(getSetting(key), 10);
+  return Number.isNaN(n) ? fallback : n;
+}
+
+function floatSetting(key, fallback) {
+  const n = parseFloat(getSetting(key));
+  return Number.isNaN(n) ? fallback : n;
+}
+
+/**
+ * Messages actually delivered in the last hour and since midnight (Brasília, UTC-3)
+ */
+function countRecentSends() {
+  const row = db.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM message_log
+        WHERE status = 'sent' AND sent_at >= datetime('now', '-1 hour')) AS hour,
+      (SELECT COUNT(*) FROM message_log
+        WHERE status = 'sent' AND sent_at >= datetime('now', '-3 hours', 'start of day', '+3 hours')) AS day
+  `).get();
+  return { hour: row.hour || 0, day: row.day || 0 };
+}
+
+/**
+ * Whether a new message may be sent right now. Returns { ok, reason }.
+ */
+function getSendBudget() {
+  const paused = getSetting('auto_pause_reason');
+  if (paused) return { ok: false, reason: `pausado automaticamente: ${paused}` };
+
+  const nextAt = intSetting('send_next_at', 0);
+  if (Date.now() < nextAt) {
+    return { ok: false, reason: `aguardando intervalo (${Math.ceil((nextAt - Date.now()) / 1000)}s)` };
+  }
+
+  const perHour = intSetting('send_limit_per_hour', 6);
+  const perDay = intSetting('send_limit_per_day', 40);
+  const sent = countRecentSends();
+  if (sent.day >= perDay) return { ok: false, reason: `limite diário atingido (${sent.day}/${perDay})` };
+  if (sent.hour >= perHour) return { ok: false, reason: `limite por hora atingido (${sent.hour}/${perHour})` };
+
+  return { ok: true };
+}
+
+/**
+ * Push the next allowed send to a random moment between the configured min and max gap
+ */
+function scheduleNextSend() {
+  const minMin = Math.max(0.5, floatSetting('send_gap_min_minutes', 2));
+  const maxMin = Math.max(minMin, floatSetting('send_gap_max_minutes', 5));
+  const gapMs = (minMin + Math.random() * (maxMin - minMin)) * 60 * 1000;
+  setSetting('send_next_at', String(Date.now() + Math.floor(gapMs)));
+}
+
+// Errors that mean WhatsApp itself is refusing us: stop everything at once
+const RESTRICTION_ERROR = /restrict|banned|spam|forbidden|not.?authori[sz]ed|blocked|bloquead/i;
+const MAX_FAILURE_STREAK = 3;
+
+/**
+ * Stop all sending until someone turns the system back on in the dashboard
+ */
+function autoPause(reason) {
+  const stamped = `${reason} (${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })})`;
+  setSetting('auto_pause_reason', stamped);
+  setSetting('active', 'false');
+  console.warn(`[Anti-Ban] ⛔ ENVIOS PAUSADOS AUTOMATICAMENTE: ${stamped}. Reative no painel depois de verificar o número.`);
+}
+
+/**
+ * Track consecutive delivery failures and pause on a restriction or a failure streak
+ */
+function recordSendOutcome(result) {
+  if (result.success) {
+    setSetting('send_failure_streak', '0');
+    return;
+  }
+  // A customer without WhatsApp says nothing about our number's health
+  if (/não possui WhatsApp/i.test(String(result.error))) return;
+
+  if (RESTRICTION_ERROR.test(String(result.error))) {
+    autoPause(`WhatsApp recusou o envio: ${String(result.error).slice(0, 200)}`);
+    return;
+  }
+
+  const streak = intSetting('send_failure_streak', 0) + 1;
+  setSetting('send_failure_streak', String(streak));
+  if (streak >= MAX_FAILURE_STREAK) {
+    autoPause(`${streak} falhas de envio seguidas. Última: ${String(result.error).slice(0, 200)}`);
+  }
+}
+
 /**
  * Format a phone number to WhatsApp format (55XXXXXXXXXXX@c.us)
  */
@@ -300,9 +399,26 @@ function buildPaidMessage(cart) {
 }
 
 /**
- * Send a WhatsApp message via WAHA with full anti-ban protections
+ * Send a WhatsApp message, honoring the automatic pause and feeding the pacing state.
+ * Every outgoing message (recovery, follow-up, payment confirmation) goes through here.
  */
 async function sendWhatsAppMessage(phone, message) {
+  const paused = getSetting('auto_pause_reason');
+  if (paused) {
+    return { success: false, paused: true, error: `Envios pausados automaticamente: ${paused}` };
+  }
+
+  const result = await deliverWhatsAppMessage(phone, message);
+  recordSendOutcome(result);
+  // Space out the next message even after a failure, so retries never come in bursts
+  if (!/não possui WhatsApp/i.test(String(result.error || ''))) scheduleNextSend();
+  return result;
+}
+
+/**
+ * Send a WhatsApp message via WAHA (typing simulation, canonical chatId)
+ */
+async function deliverWhatsAppMessage(phone, message) {
   const wahaUrl = getSetting('waha_api_url') || process.env.WAHA_API_URL;
   const configuredSession = getSetting('waha_session') || process.env.WAHA_SESSION || 'default';
   const apiKey = getSetting('waha_api_key') || process.env.WAHA_API_KEY;
@@ -601,7 +717,7 @@ function countFollowUpBackfill(days) {
  * Send the second (follow-up) message to carts whose first recovery message
  * was sent `followup_delay_hours` ago and that still haven't been paid.
  */
-async function processFollowUps(minDelaySec, maxDelaySec) {
+async function processFollowUps() {
   if (getSetting('followup_active') === 'false') return;
   if (!getSetting('followup_message')) return;
 
@@ -659,7 +775,6 @@ async function processFollowUps(minDelaySec, maxDelaySec) {
     console.log(`[Follow-up] ${dueCarts.length} carrinho(s) aguardando a 2ª mensagem`);
   }
 
-  let sentInBatch = 0;
   for (const cart of dueCarts) {
     // Backfill pacing: next attempt in a random 4–9 min (skips included, so the queue keeps moving)
     if (cart._backfill) {
@@ -722,24 +837,35 @@ async function processFollowUps(minDelaySec, maxDelaySec) {
       }
     }
 
-    if (sentInBatch > 0) {
-      const jitterMs = Math.floor(Math.random() * ((maxDelaySec - minDelaySec) * 1000 + 1)) + (minDelaySec * 1000);
-      console.log(`[Anti-Ban] ⏳ Aguardando delay humano de ${(jitterMs / 1000).toFixed(1)}s antes da próxima 2ª mensagem...`);
-      await new Promise((resolve) => setTimeout(resolve, jitterMs));
+    // Anti-Ban pacing: one message per tick, spaced and capped (shared with 1st messages)
+    const budget = getSendBudget();
+    if (!budget.ok) {
+      logBudgetWait(budget.reason);
+      return;
     }
 
-    // Re-check: the customer may have paid while we were waiting
+    // Re-check: the customer may have paid in the meantime
     const fresh = db.prepare('SELECT recovered, status FROM abandoned_carts WHERE id = ?').get(cart.id);
     if (!fresh || fresh.recovered === 1 || fresh.status !== 'sent') {
       markFollowUp(cart, 2, null);
       continue;
     }
 
+    // A 2nd unanswered message is what gets reported as spam: by default only
+    // follow up with customers who answered the 1st one
+    if (getSetting('followup_only_if_replied') !== 'false') {
+      const replied = await customerRepliedSince(cart.customer_phone, cart.message_sent_at);
+      if (!replied) {
+        console.log(`[Follow-up] ⏭️ Carrinho #${cart.id}: ignorado (cliente não respondeu à 1ª mensagem)`);
+        markFollowUp(cart, 2, null);
+        continue;
+      }
+    }
+
     try {
       const message = buildMessage(cart, 'followup_message');
       console.log(`[Follow-up] Enviando 2ª mensagem para #${cart.id} - ${cart.customer_name} (${cart.customer_phone})`);
       const result = await sendWhatsAppMessage(cart.customer_phone, message);
-      sentInBatch++;
 
       if (result.success) {
         db.prepare(`
@@ -770,6 +896,37 @@ async function processFollowUps(minDelaySec, maxDelaySec) {
       console.error(`[Follow-up] Erro inesperado no carrinho #${cart.id}:`, err.message);
       markFollowUp(cart, 2, null);
     }
+    // One message per tick: the rest waits for the next tick and the random gap
+    return;
+  }
+}
+
+/**
+ * Whether the customer sent us any message after `sinceDb` (SQLite UTC datetime).
+ * Reads the chat from WAHA; any error counts as "no reply" so we never risk a cold 2nd message.
+ */
+async function customerRepliedSince(phone, sinceDb) {
+  const wahaUrl = getSetting('waha_api_url') || process.env.WAHA_API_URL;
+  const configuredSession = getSetting('waha_session') || process.env.WAHA_SESSION || 'default';
+  const apiKey = getSetting('waha_api_key') || process.env.WAHA_API_KEY;
+  const headers = { 'Content-Type': 'application/json' };
+  if (apiKey) headers['X-Api-Key'] = apiKey;
+
+  try {
+    const session = await resolveWorkingSession(wahaUrl, apiKey, configuredSession);
+    const { chatId, exists } = await resolveChatId(phone, wahaUrl, session, apiKey);
+    if (!exists) return false;
+
+    const res = await axios.get(
+      `${wahaUrl}/api/${encodeURIComponent(session)}/chats/${encodeURIComponent(chatId)}/messages`,
+      { headers, params: { limit: 30, downloadMedia: false }, timeout: 10000 }
+    );
+    const sinceSec = parseDbDate(sinceDb) / 1000;
+    const messages = Array.isArray(res.data) ? res.data : [];
+    return messages.some((m) => m && m.fromMe === false && Number(m.timestamp) >= sinceSec);
+  } catch (err) {
+    console.warn(`[Follow-up] Não foi possível verificar resposta de ${phone}: ${err.message}`);
+    return false;
   }
 }
 
@@ -791,6 +948,15 @@ function parseDbDate(value) {
   const iso = str.includes('T') ? str : str.replace(' ', 'T') + 'Z';
   const t = Date.parse(iso);
   return Number.isNaN(t) ? Date.now() : t;
+}
+
+// Log a pacing wait only when its reason changes, not on every 1-minute tick
+let lastBudgetLog = '';
+function logBudgetWait(reason) {
+  const kind = reason.replace(/\(.*\)/, '').trim();
+  if (kind === lastBudgetLog) return;
+  lastBudgetLog = kind;
+  console.log(`[Anti-Ban] ⏸️ Envio adiado: ${reason}`);
 }
 
 // Global lock to prevent overlapping runs from 1-minute cron
@@ -854,8 +1020,6 @@ async function processPendingCarts() {
     }
 
     const cooldownHours = parseInt(getSetting('cart_cooldown_hours') || '4', 10);
-    const minDelaySec = parseInt(getSetting('anti_ban_delay_min') || '8', 10);
-    const maxDelaySec = parseInt(getSetting('anti_ban_delay_max') || '18', 10);
 
     for (let i = 0; i < pendingCarts.length; i++) {
       const cart = pendingCarts[i];
@@ -939,18 +1103,20 @@ async function processPendingCarts() {
         continue;
       }
 
-      await processCart(cart);
-
-      // If more carts remain in batch, apply human random delay between messages
-      if (i < pendingCarts.length - 1) {
-        const jitterMs = Math.floor(Math.random() * ((maxDelaySec - minDelaySec) * 1000 + 1)) + (minDelaySec * 1000);
-        console.log(`[Anti-Ban] ⏳ Aguardando delay humano de ${(jitterMs / 1000).toFixed(1)}s antes do próximo envio...`);
-        await new Promise((resolve) => setTimeout(resolve, jitterMs));
+      // Anti-Ban pacing: at most one message per tick, spaced and capped (see getSendBudget)
+      const budget = getSendBudget();
+      if (!budget.ok) {
+        logBudgetWait(budget.reason);
+        return;
       }
+
+      await processCart(cart);
+      // The next cart waits for the next tick and the random gap
+      return;
     }
 
-    // Second message (follow-up) for carts that received the first message X hours ago
-    await processFollowUps(minDelaySec, maxDelaySec);
+    // Second message (follow-up) only when no first message was waiting to go out
+    await processFollowUps();
   } finally {
     isProcessingCarts = false;
   }

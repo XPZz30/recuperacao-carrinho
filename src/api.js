@@ -268,7 +268,15 @@ router.put('/settings', (req, res) => {
       }
     });
 
+    // Turning the system back on is the manual "resume" after an automatic anti-ban pause
+    const resuming = updates.active === 'true' && db.getSetting('active') !== 'true';
+
     updateMany(updates);
+
+    if (resuming) {
+      updateMany({ auto_pause_reason: '', send_failure_streak: '0' });
+      console.log('[Anti-Ban] ▶️ Sistema reativado pelo painel; pausa automática removida.');
+    }
     res.json({ success: true });
   } catch (error) {
     console.error('[API] Erro ao atualizar settings:', error.message);
